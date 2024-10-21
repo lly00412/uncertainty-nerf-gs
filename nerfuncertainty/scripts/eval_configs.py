@@ -75,10 +75,12 @@ class EnsembleConfig(EvalUncertainty):
 class MCDropoutConfig(EvalUncertainty):
     mc_samples: Optional[int] = None
     # Number of samples to use for Monte Carlo dropout.
-
+    eval_depth: bool = False
+    # eval uncertainty for depth cannot be evaluated for ActiveNerfacto
+    
 @dataclass
 class ActiveNerfactoConfig(EvalUncertainty):
-    eval_depth: bool = True
+    eval_depth: bool = False
     # eval uncertainty for depth cannot be evaluated for ActiveNerfacto
     
 @dataclass
@@ -90,7 +92,6 @@ class ActiveSplatfactoConfig(EvalUncertainty):
 class RobustNerfactoConfig(EvalUncertainty):
     eval_depth: bool = False
     # eval uncertainty for depth cannot be evaluated for RobustNerfacto
-
     eval_rgb: bool = False
     # eval rgb uncertainty cannot be evaluated for RobustNerfacto
 

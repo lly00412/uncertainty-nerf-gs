@@ -28,6 +28,7 @@ robustnerf = 'nerfuncertainty.dataparsers.robustnerf.robustnerf_config:robustner
 sparse-blender = 'nerfuncertainty.dataparsers.sparse_blender.sparse_blender_config:sparseBlenderDataparser'
 blender-downscale = 'nerfuncertainty.dataparsers.blender_downscale.blender_downscale_config:blenderDownscaleDataparser'
 sparse-mipnerf360 = 'nerfuncertainty.dataparsers.sparse_mipnerf360.sparse_mipnerf360_config:sparseMipNerf360Dataparser'
+sparse-mipnerf360v2 = 'nerfuncertainty.dataparsers.sparse_mipnerf360_v2.sparse_mipnerf360_config:sparseMipNerf360Dataparser'
 ood-mipnerf360 = 'nerfuncertainty.dataparsers.ood_mipnerf360.ood_mipnerf360_config:oodMipNerf360Dataparser'
 nerfonthego = 'nerfuncertainty.dataparsers.nerfonthego.nerfonthego_config:nerfOnTheGoDataparser'
 
