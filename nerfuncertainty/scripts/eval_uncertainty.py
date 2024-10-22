@@ -336,6 +336,7 @@ def get_unc_metrics_rgb(
     ratio, err_mae, err_var_mae, ause_mae = ause(
         rgb_var_flat, absolute_error_flat, err_type="mae"
     )
+
     """
     if plot_img_ause:
         plot_errors(
@@ -346,6 +347,7 @@ def get_unc_metrics_rgb(
     ratio, err_mse, err_var_mse, ause_mse = ause(
         rgb_var_flat, squared_error_flat, err_type="mse"
     )
+
     """
     if plot_img_ause:
         plot_errors(

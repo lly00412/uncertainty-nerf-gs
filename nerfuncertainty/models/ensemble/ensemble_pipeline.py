@@ -157,7 +157,6 @@ class EnsemblePipeline(VanillaPipeline):
             outputs_list.append(model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box))
 
         cam = camera_ray_bundle
-        breakpoint()
 
         outputs = {}
         for k in outputs_list[0].keys():
