@@ -181,12 +181,13 @@ class SparseMipNerf360v2(Nerfstudio):
             if split == "train":
                 # assert self.config.proportion_train_images > 0.0 or self.config.proportion_train_images <= 1.0 #, "proportion of trainig images must in [0.0, 1.0]"
                 # randomly sample indices
-                rng = torch.Generator().manual_seed(self.config.seed_random_split)
-                perm = torch.randperm(len(i_train), generator=rng)
+                # rng = torch.Generator().manual_seed(self.config.seed_random_split)
+                # perm = torch.randperm(len(i_train), generator=rng)
                 # num_images = int(np.round(len(i_train)*self.config.proportion_train_images))
-                inds = perm[:self.config.num_train_images]
+                # inds = perm[:num_images]
+                # do uniform sampling
+                inds = np.linspace(0,len(i_train)-1,self.config.num_train_images,dtype=int)
                 i_train_ = list(np.array(i_train)[inds])
-
                 indices = i_train_
             elif split in ["val", "test"]:
                 indices = i_eval

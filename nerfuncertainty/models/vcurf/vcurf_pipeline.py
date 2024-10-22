@@ -26,15 +26,17 @@ from nerfuncertainty.metrics import ause
 
 
 
-class EnsemblePipeline(VanillaPipeline):
+class VCURFPipeline(VanillaPipeline):
     def __init__(
         self,
         config: VanillaPipelineConfig,
         device: str,
-        config_paths: Tuple[Path, ...],
+        config_path: Path,
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
+        num_vcams: int = 6,
+        sampling_radii_depth_ratio: float = 0.1,
         grad_scaler: Optional[GradScaler] = None,
     ):
         super().__init__(
@@ -46,20 +48,15 @@ class EnsemblePipeline(VanillaPipeline):
         )
         # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
-        self.models = nn.ModuleList()
-        self.models.append(self.model)
-        for _ in range(1, len(config_paths)):
-            _model = config.model.setup(
-                scene_box=self.datamanager.train_dataset.scene_box,
-                num_train_data=len(self.datamanager.train_dataset),
-                metadata=self.datamanager.train_dataset.metadata,
-                device=device,
-                grad_scaler=grad_scaler,
-            )
-            self.models.append(_model)
+        _model = config.model.setup(
+            scene_box=self.datamanager.train_dataset.scene_box,
+            num_train_data=len(self.datamanager.train_dataset),
+            metadata=self.datamanager.train_dataset.metadata,
+            device=device,
+            grad_scaler=grad_scaler,
+        )
 
-        self.model = self.models[0]
-
+        self.model = _model
         self.world_size = world_size
         if world_size > 1:
             self._model = typing.cast(
@@ -68,77 +65,9 @@ class EnsemblePipeline(VanillaPipeline):
             )
             dist.barrier(device_ids=[local_rank])
 
-    def load_state_dict(
-        self,
-        state_dict: Mapping[str, Any],
-        strict: Optional[bool] = None,
-        model_idx: int = 0,
-    ):
-        is_ddp_model_state = True
-        model_state = {}
-        for key, value in state_dict.items():
-            if key.startswith("_model."):
-                # remove the "_model." prefix from key
-                model_state[key[len("_model.") :]] = value
-                # make sure that the "module." prefix comes from DDP,
-                # rather than an attribute of the model named "module"
-                if not key.startswith("_model.module."):
-                    is_ddp_model_state = False
-        # remove "module." prefix added by DDP
-        if is_ddp_model_state:
-            model_state = {
-                key[len("module.") :]: value for key, value in model_state.items()
-            }
-        """
-        print(self.config.model)
-        print(self.config.model_name)
-        #print(state_dict.keys())
-        print(self.config)
-        if isinstance(self.config.model, nerfstudio.models.splatfacto.SplatfactoModelConfig):
-            print("HEEJ")
-        """
-        pipeline_state = {
-            key: value
-            for key, value in state_dict.items()
-            #if not key.startswith("_model.") # line needed for nerfacto?
-        }
+        self.num_vcams = num_vcams
+        self.sampling_radii_depth_ratio = sampling_radii_depth_ratio
 
-        if model_idx == 0:
-            try:
-                self.model.load_state_dict(model_state, strict=True)
-            except RuntimeError:
-                if not strict:
-                    self.model.load_state_dict(model_state, strict=False)
-                else:
-                    raise
-
-            super().load_state_dict(pipeline_state, strict=False)
-        else:
-            try:
-                self.models[model_idx].load_state_dict(model_state, strict=True)
-            except RuntimeError:
-                if not strict:
-                    self.models[model_idx].load_state_dict(model_state, strict=False)
-                else:
-                    raise
-                
-
-    def load_pipeline(
-        self, loaded_state: Dict[str, Any], step: int, model_idx: int = 0
-    ) -> None:
-        """Load the checkpoint from the given path
-
-        Args:
-            loaded_state: pre-trained model state dict
-            step: training step of the loaded checkpoint
-        """
-        state = {
-            (key[len("module.") :] if key.startswith("module.") else key): value
-            for key, value in loaded_state.items()
-        }
-        self.model.update_to_step(step)
-        self.models[model_idx].update_to_step(step)
-        self.load_state_dict(state, model_idx=model_idx)
 
 
     def get_ensemble_outputs_for_camera_ray_bundle(
@@ -146,7 +75,7 @@ class EnsemblePipeline(VanillaPipeline):
             camera_ray_bundle,
             obb_box: Optional[OrientedBox] = None,
     ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        """Compute the ensemble outputs for a given camera ray bundle.
+        """Compute the outputs for a given camera ray bundle and its nearby virtual cameras.
         
         Args:
             camera_ray_bundle: CameraRayBundle instance
@@ -155,10 +84,7 @@ class EnsemblePipeline(VanillaPipeline):
         outputs_list = []
         for model in self.models:
             outputs_list.append(model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box))
-
-        cam = camera_ray_bundle
-        breakpoint()
-
+        
         outputs = {}
         for k in outputs_list[0].keys():
             elements = torch.stack([out[k] for out in outputs_list], dim=0)
