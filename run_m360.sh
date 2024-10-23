@@ -10,3 +10,17 @@ python nerfuncertainty/scripts/eval_uncertainty.py active-nerfacto-config --load
 
 # Train nerfacto for VS-NeRF
 ns-train nerfacto --data /mnt/Data2/nerf_datasets/m360/kitchen/ --output-dir output/m360/kitchen_v30 --experiment-name kitchen --method-name nerfacto --timestamp main --pipeline.model.camera-optimizer.mode off --viewer.quit-on-train-completion True sparse-mipnerf360v2 --num_train_images 30 --downscale-factor 4
+
+
+ns-eval-unc vcurf-config
+
+ns-eval-unc vcurf-config --load-config ./output/m360/kitchen_v30/kitchen/nerfacto/main/config.yml \
+        --output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/rgb_l2/metrics.json \
+        --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/  \
+        --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/rgb_l2/plots --save-rendered-images --unc-max 0.3
+
+ns-eval-unc vcurf-config --load-config ./output/m360/kitchen_v30/kitchen/nerfacto/main/config.yml \
+        --sampling-method depth \
+        --output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/depth_l2/metrics.json \
+        --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/  \
+        --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/depth_l2/plots --save-rendered-images --unc-max 0.3

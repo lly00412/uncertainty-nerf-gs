@@ -14,17 +14,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 from torch import nn
 from pathlib import Path
-
+import numpy as np
+import torch.nn.functional as F
+import copy
 
 from nerfstudio.pipelines.base_pipeline import VanillaPipeline, VanillaPipelineConfig
 from nerfstudio.models.base_model import Model
 from nerfstudio.data.scene_box import OrientedBox
-from nerfstudio.utils import colormaps
-
-from einops import rearrange
-from nerfuncertainty.metrics import ause
-
-
+from nerfstudio.cameras.cameras import Cameras
 
 class VCURFPipeline(VanillaPipeline):
     def __init__(
@@ -37,6 +34,7 @@ class VCURFPipeline(VanillaPipeline):
         local_rank: int = 0,
         num_vcams: int = 6,
         sampling_radii_depth_ratio: float = 0.1,
+        sampling_method: Literal["rgb", "depth"] = "rgb",
         grad_scaler: Optional[GradScaler] = None,
     ):
         super().__init__(
@@ -46,7 +44,6 @@ class VCURFPipeline(VanillaPipeline):
             world_size=world_size,
             grad_scaler=grad_scaler,
         )
-        # TODO(ethan): get rid of scene_bounds from the model
         assert self.datamanager.train_dataset is not None, "Missing input dataset"
         _model = config.model.setup(
             scene_box=self.datamanager.train_dataset.scene_box,
@@ -67,6 +64,7 @@ class VCURFPipeline(VanillaPipeline):
 
         self.num_vcams = num_vcams
         self.sampling_radii_depth_ratio = sampling_radii_depth_ratio
+        self.sampling_method = sampling_method
 
 
 
@@ -81,42 +79,78 @@ class VCURFPipeline(VanillaPipeline):
             camera_ray_bundle: CameraRayBundle instance
             batch: Batch instance
         """
-        outputs_list = []
-        for model in self.models:
-            outputs_list.append(model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box))
-        
-        outputs = {}
-        for k in outputs_list[0].keys():
-            elements = torch.stack([out[k] for out in outputs_list], dim=0)
-            outputs[k] = elements.mean(dim=0)
-            
-            # predictive std with aleatoric and epistemic combined
-            if "rgb_std" in outputs_list[0].keys() and "depth_std" in outputs_list[0].keys():
-                if k in ["rgb", "depth"]:
-                    # compute mean of predicted var
-                    sigma2_alea = torch.stack([out[k + "_var"] for out in outputs_list], dim=0)
-                    outputs[k + "_var_alea"] = sigma2_alea.mean(dim=0).mean(dim=-1).unsqueeze(-1)
-                    # compute var across predicted means
-                    outputs[k + "_var_epi"] = elements.var(dim=0).mean(dim=-1).unsqueeze(-1)
-                    # combine vars
-                    outputs[k + "_var"] = outputs[k + "_var_epi"] + outputs[k + "_var_alea"] 
-                    outputs[k + "_std"] = outputs[k + "_var"].sqrt()
-                    
-                    # if k in ["rgb"]:
-                    #     print("comb std: ", outputs[k + "_std"].max().item(), outputs[k + "_std"].min().item())
-                    #     print("comb var.sqrt: ", outputs[k + "_var"].sqrt().max().item(), outputs[k + "_var"].sqrt().min().item())
-                        
-                    #     print("epi: ", outputs[k + "_std_epi"].max().item(), outputs[k + "_std_epi"].min().item())
-                    #     print("epi var.sqrt: ", outputs[k + "_var_epi"].sqrt().max().item(), outputs[k + "_var_epi"].sqrt().min().item())
-                        
-                    #     print("alea: ", outputs[k + "_std_alea"].max().item(), outputs[k + "_std_alea"].min().item())
-                    #     print("alea var.sqrt: ", outputs[k + "_var_alea"].sqrt().max().item(), outputs[k + "_var_alea"].sqrt().min().item())
-                    #     print()
-            else:
-                # predictive std is sample std
-                if k in ["rgb", "depth", "expected_depth"]:
-                    outputs[k + "_std"] = elements.std(dim=0).mean(dim=-1).unsqueeze(-1)
-                    # print(outputs[k + "_std"].max(), outputs[k + "_std"].min())
+        outputs = self.model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box)
+
+        GetVCams = VirtualCameras(camera_ray_bundle)
+        look_at, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        D_median = outputs['depth'].clone().flatten().median(0).values
+        radiaus = self.sampling_radii_depth_ratio * D_median
+        Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at, radiaus=radiaus)
+
+        rd_depth = outputs['depth'].clone().permute(2,0,1)
+        rd_depths = rd_depth.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
+        pred_img = outputs['rgb'].clone().permute(2,0,1)
+        rd_pred_imgs = pred_img.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
+
+        vir_depths = []
+        vir_pred_imgs = []
+        rd2virs = []
+
+        K_ = camera_ray_bundle.get_intrinsics_matrices().squeeze() #(3,3)
+        K = torch.eye(4).to(K_)
+        K[:3,:3] = K_
+
+        backwarp = BackwardWarping(out_hw=(camera_ray_bundle.image_height, camera_ray_bundle.image_width),
+                                   device=outputs['depth'].device, K=K)
+
+        for vir_camera_ray_bundle in Vcams:
+            vir_render_pkg = self.model.get_outputs_for_camera(vir_camera_ray_bundle, obb_box=obb_box)
+            vir_depth = vir_render_pkg['depth'].squeeze()
+            vir_pred_img = vir_render_pkg['rgb'].permute(2,0,1)
+            vir_c2w = torch.eye(4).to(rd_c2w)
+            vir_c2w[:3,:] = vir_camera_ray_bundle.camera_to_worlds.squeeze()
+            rd2vir = torch.inverse(vir_c2w) @ rd_c2w
+            rd2virs.append(rd2vir)
+            vir_depths.append(vir_depth.unsqueeze(0))
+            vir_pred_imgs.append(vir_pred_img)
+        vir_depths = torch.stack(vir_depths)
+        rd2virs = torch.stack(rd2virs)
+        vir2rd_pred_imgs, vir2rd_depths, nv_mask = backwarp(img_src=rd_pred_imgs, depth_src=vir_depths,
+                                                            depth_tgt=rd_depths,
+                                                            tgt2src_transform=rd2virs)
+        ################################
+        #  compute uncertainty by l2 diff
+        ################################
+        # depth uncertainty
+        vir2rd_depth_sum = vir2rd_depths.sum(0)
+        numels = float(self.num_vcams) - nv_mask.sum(0)
+        vir2rd_depth = torch.zeros_like(rd_depth)
+        vir2rd_depth[numels > 0] = vir2rd_depth_sum[numels > 0] / numels[numels > 0]
+        depth_l2 = (rd_depth - vir2rd_depth) ** 2
+        depth_l2 = depth_l2.squeeze(0)
+
+        # rgb uncertainty
+        vir2rd_pred_sum = vir2rd_pred_imgs.sum(0).mean(0, keepdim=True)
+        rendering_ = pred_img.mean(0, keepdim=True)
+        vir2rd_pred = torch.zeros_like(rendering_)
+        vir2rd_pred[numels > 0] = vir2rd_pred_sum[numels > 0] / numels[numels > 0]
+        rgb_l2 = (rendering_ - vir2rd_pred) ** 2
+        rgb_l2 = rgb_l2.squeeze(0)
+
+        if 'rgb_std' in outputs.keys():
+            outputs['rgb_vc_std'] = rgb_l2.unsqueeze(-1)
+        else:
+            outputs['rgb_std'] = rgb_l2.unsqueeze(-1)
+
+        if 'depth_std' in outputs.keys():
+            outputs['depth_vc_std'] = depth_l2.unsqueeze(-1)
+        else:
+            outputs['depth_std'] = depth_l2.unsqueeze(-1)
+
+
+        if self.sampling_method == 'depth':
+            outputs['rgb_std'] = outputs['depth_std']
+
         return outputs
     
 
@@ -134,242 +168,238 @@ class VCURFPipeline(VanillaPipeline):
             )
         return metrics_dict, images_dict
 
-
-
-class EnsemblePipelineSplatfacto(EnsemblePipeline):
-    def __init__(
-        self,
-        config: VanillaPipelineConfig,
-        device: str,
-        config_paths: Tuple[Path, ...],
-        test_mode: Literal["test", "val", "inference"] = "val",
-        world_size: int = 1,
-        local_rank: int = 0,
-        grad_scaler: Optional[GradScaler] = None,
-    ):
-        super().__init__(
-            config=config,
-            device=device,
-            config_paths=config_paths,
-            test_mode=test_mode,
-            world_size=world_size,
-            local_rank=local_rank,
-            grad_scaler=grad_scaler,
-        )
+class VirtualCameras:
+    def __init__(self, Center_Camera):
+        self.center_camera: Cameras = Center_Camera
+        self.sampling_center = self.get_camera_center(self.center_camera)
+        self.data_device = self.sampling_center.device
+    def get_camera_center(self,camera: Cameras):
+        c2w = camera.camera_to_worlds # (1,3,4)
+        camera_o = c2w[0,:3,3].clone()
+        return camera_o
+    def random_points_on_sphere(self, N, r, O):
         """
-        # TODO(ethan): get rid of scene_bounds from the model
-        assert self.datamanager.train_dataset is not None, "Missing input dataset"
-        self.models = nn.ModuleList()
-        self.models.append(self.model)
-        for _ in range(1, len(config_paths)):
-            _model = config.model.setup(
-                scene_box=self.datamanager.train_dataset.scene_box,
-                num_train_data=len(self.datamanager.train_dataset),
-                metadata=self.datamanager.train_dataset.metadata,
-                device=device,
-                grad_scaler=grad_scaler,
-            )
-            self.models.append(_model)
+        Generate N random points on a sphere of radius r centered at O.
 
-        self.model = self.models[0]
+        Args:
+        - N: number of points
+        - r: radius of the sphere
+        - O: center of the sphere as a tensor of shape (3,), i.e., O = torch.tensor([x, y, z])
 
-        self.world_size = world_size
-        if world_size > 1:
-            self._model = typing.cast(
-                Model,
-                DDP(self._model, device_ids=[local_rank], find_unused_parameters=True),
-            )
-            dist.barrier(device_ids=[local_rank])
+        Returns:
+        - points: a tensor of shape (N, 3) representing the N random points on the sphere
         """
+        points = torch.rand(N,3).to(O)
+        points = 2*points-torch.ones_like(points)
+        points = points / torch.norm(points, dim=1, keepdim=True)
+        points = points * r
+        points = points + O
+        return points
 
-    def load_state_dict(
-        self,
-        state_dict: Mapping[str, Any],
-        strict: Optional[bool] = None,
-        model_idx: int = 0,
-    ):
-        is_ddp_model_state = True
-        model_state = {}
-        for key, value in state_dict.items():
-            if key.startswith("_model."):
-                # remove the "_model." prefix from key
-                model_state[key[len("_model.") :]] = value
-                # make sure that the "module." prefix comes from DDP,
-                # rather than an attribute of the model named "module"
-                if not key.startswith("_model.module."):
-                    is_ddp_model_state = False
-        # remove "module." prefix added by DDP
-        if is_ddp_model_state:
-            model_state = {
-                key[len("module.") :]: value for key, value in model_state.items()
-            }
-        # pipeline_state loading changed for splatfacto
-        pipeline_state = {
-            key: value
-            for key, value in state_dict.items()
-        }
+    def get_N_near_cam_by_look_at(self, N, look_at, radiaus=0.1):
+        # sample new camera center
+        new_centers = self.random_points_on_sphere(N,radiaus, self.sampling_center)
+        Vcams = []
+        for new_o in new_centers:
+            # create new camera pose by look at
+            forward = look_at - new_o
+            forward /= torch.linalg.norm(forward)
+            forward = forward.to(new_o)
+            world_up = torch.tensor([0, 1, 0]).to(new_o)  # need to be careful for the openGL system!!!
+            right = torch.cross(world_up, forward)
+            right /= torch.linalg.norm(right)
+            up = torch.cross(forward, right)
 
-        if model_idx == 0:
-            try:
-                self.model.load_state_dict(model_state, strict=True)
-            except RuntimeError:
-                if not strict:
-                    self.model.load_state_dict(model_state, strict=False)
-                else:
-                    raise
+            new_c2w = torch.eye(4).to(new_o)
+            new_c2w[:3, :3] = torch.vstack([right, up, forward]).T
+            new_c2w[:3, 3] = new_o
+            new_c2w = new_c2w[:3,:]
 
-            super().load_state_dict(pipeline_state, strict=False)
-        else:
-            try:
-                self.models[model_idx].load_state_dict(model_state, strict=True)
-            except RuntimeError:
-                if not strict:
-                    self.models[model_idx].load_state_dict(model_state, strict=False)
-                else:
-                    raise
-    
-    # def get_ensemble_outputs_for_camera_ray_bundle(
-    #         self,
-    #         camera_ray_bundle,
-    # ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-    #     """Compute the ensemble outputs for a given camera ray bundle.
-        
-    #     Args:
-    #         camera_ray_bundle: CameraRayBundle instance
-    #         batch: Batch instance
-    #     """
-    #     outputs_list = []
-    #     # calling get_outputs_for_camera() for splatfacto instead of get_outputs_for_camera_ray_bundle()
-    #     for model in self.models:
-    #         outputs_list.append(model.get_outputs_for_camera(camera_ray_bundle))
-        
-    #     outputs = {}
-    #     for k in outputs_list[0].keys():
-    #         elements = torch.stack([out[k] for out in outputs_list], dim=0)
-    #         outputs[k] = elements.mean(dim=0)
-    #         if k in ["rgb", "depth", "expected_depth"]:
-    #             outputs[k + "_std"] = elements.std(dim=0).mean(dim=-1).unsqueeze(-1)
-    #             # print(outputs[k + "_std"].max(), outputs[k + "_std"].min())
-    #     return outputs
-    
-    
+            new_camera = copy.deepcopy(self.center_camera)
+            new_camera.camera_to_worlds = new_c2w.unsqueeze(0)
+            Vcams.append(new_camera)
 
-    # def get_image_metrics_and_images_unc(
-    #     self,
-    #     outputs: Dict[str, torch.Tensor],
-    #     batch: Dict[str, torch.Tensor],
-    #     metrics_dict: Dict[str, float],
-    #     images_dict: Dict[str, torch.Tensor],
-    # ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
-        
-    #     images_dict['rgb_mean'] = outputs["rgb"]
-    #     combined_unc = torch.cat(
-    #         [
-    #             colormaps.apply_depth_colormap(
-    #                 outputs["rgb_std"],
-    #                 accumulation=None, #outputs["accumulation"],
-    #                 colormap_options=colormaps.ColormapOptions(
-    #                     colormap="inferno",
-    #                 ),
-    #             )
-    #         ],
-    #         dim=1,
-    #     )
+        return Vcams
 
-    #     epist_var = outputs["rgb_std"]**2 + (1.0 - outputs["accumulation"]) ** 2
-    #     epist_std = torch.sqrt(epist_var)
-    #     combined_unc_epits = torch.cat(
-    #         [
-    #             colormaps.apply_depth_colormap(
-    #                 epist_std,
-    #                 accumulation=None, #outputs["accumulation"],
-    #                 colormap_options=colormaps.ColormapOptions(
-    #                     colormap="inferno",
-    #                 ),
-    #             )
-    #         ],
-    #         dim=1,
-    #     )
 
-    #     images_dict["unc"] = combined_unc
-    #     images_dict["unc_epist"] = combined_unc_epits
+class Projection(nn.Module):
+    """Layer which projects 3D points into a camera view
+    """
+    def __init__(self, height, width, eps=1e-7):
+        super(Projection, self).__init__()
 
-    #     #### AUSE GOES HERE
-    #     predicted_rgb_flat = rearrange(outputs["rgb"], "h w c -> (h w) c")
-    #     gt_rgb_flat = rearrange(batch["image"].to(self.device), "h w c -> (h w) c")
-    #     assert predicted_rgb_flat.device == gt_rgb_flat.device
+        self.height = height
+        self.width = width
+        self.eps = eps
 
-    #     fine_err_mse = torch.sum(
-    #         (predicted_rgb_flat - gt_rgb_flat) ** 2, dim=-1
-    #     ).flatten()
-    #     fine_err_mae = torch.sum(
-    #         torch.abs(predicted_rgb_flat - gt_rgb_flat), dim=-1
-    #     ).flatten()
+    def forward(self, points3d, K, normalized=True):
+        """
+        Args:
+            points3d (torch.tensor, [N,4,(HxW)]: 3D points in homogeneous coordinates
+            K (torch.tensor, [torch.tensor, (N,4,4)]: camera intrinsics
+            normalized (bool):
+                - True: normalized to [-1, 1]
+                - False: [0, W-1] and [0, H-1]
+        Returns:
+            xy (torch.tensor, [N,H,W,2]): pixel coordinates
+        """
+        # projection
+        points2d = torch.matmul(K[:, :3, :], points3d)
 
-    #     #if outputs["unc"].shape[-1] == 3:
-    #     #    outputs["unc"] = outputs["unc"].mean(-1).unsqueeze(-1)
-    #     #predicted_rgb_var = epist_var # outputs["unc"].reshape(-1)
-    #     predicted_rgb_var = (outputs["rgb_std"]**2).flatten()
-        
-    #     # for plotting curves, use ause_err (y-axis) over ratio_removed (x-axis)
-    #     ratio_removed, ause_err, ause_err_by_var, ause_rmse = ause(
-    #         predicted_rgb_var, fine_err_mse, err_type="rmse"
-    #     )
-    #     metrics_dict["ause_rmse"] = ause_rmse
-    #     metrics_dict["ause_rmse_ratio_removed"] = ratio_removed
-    #     metrics_dict["ause_rmse_err"] = ause_err
-    #     metrics_dict["ause_rmse_err_by_var"] = ause_err_by_var
-        
-    #     ratio_removed, ause_err, ause_err_by_var, ause_rmse = ause(
-    #         epist_var.flatten(), fine_err_mse, err_type="rmse"
-    #     )
-    #     metrics_dict["ause_rmse_epist_var"] = ause_rmse
-    #     metrics_dict["ause_rmse_ratio_removed_epist_var"] = ratio_removed
-    #     metrics_dict["ause_rmse_err_epist_var"] = ause_err
-    #     metrics_dict["ause_rmse_err_by_var_epist_var"] = ause_err_by_var
-        
-    #     ratio_removed, ause_err, ause_err_by_var, ause_mse = ause(
-    #         predicted_rgb_var, fine_err_mse, err_type="mse")
-    #     metrics_dict["ause_mse"] = ause_mse
-    #     metrics_dict["ause_mse_ratio_removed"] = ratio_removed
-    #     metrics_dict["ause_mse_err"] = ause_err
-    #     metrics_dict["ause_mse_err_by_var"] = ause_err_by_var
-        
-    #     ratio_removed, ause_err, ause_err_by_var, ause_mse = ause(
-    #         epist_var.flatten(), fine_err_mse, err_type="mse")
-    #     metrics_dict["ause_mse_epist_var"] = ause_mse
-    #     metrics_dict["ause_mse_ratio_removed_epist_var"] = ratio_removed
-    #     metrics_dict["ause_mse_err_epist_var"] = ause_err
-    #     metrics_dict["ause_mse_err_by_var_epist_var"] = ause_err_by_var
-        
-    #     ratio_removed, ause_err, ause_err_by_var, ause_mae = ause(
-    #         predicted_rgb_var, fine_err_mae, err_type="mae")
-    #     # ic(ause_mse, ause_mae, ause_rmse)
-    #     metrics_dict["ause_mae"] = ause_mae
-    #     metrics_dict["ause_mae_ratio_removed"] = ratio_removed
-    #     metrics_dict["ause_mae_err"] = ause_err
-    #     metrics_dict["ause_mae_err_by_var"] = ause_err_by_var  
-        
-    #     ratio_removed, ause_err, ause_err_by_var, ause_mae = ause(
-    #         epist_var.flatten(), fine_err_mae, err_type="mae")
-    #     # ic(ause_mse, ause_mae, ause_rmse)
-    #     metrics_dict["ause_mae_epist_var"] = ause_mae
-    #     metrics_dict["ause_mae_ratio_removed_epist_var"] = ratio_removed
-    #     metrics_dict["ause_mae_err_epist_var"] = ause_err
-    #     metrics_dict["ause_mae_err_by_var_epist_var"] = ause_err_by_var    
-    #     #### END AUSE
-        
-    #     #### NLL
-    #     rgb_std_flat = rearrange(outputs["rgb_std"], "h w c -> (h w) c") + 0.01 # using 0.01 to assume 1 percent of the pixel colors are noise
-    #     m = torch.distributions.Normal(loc=0., scale=rgb_std_flat)
-    #     nll = -torch.mean(m.log_prob(predicted_rgb_flat - gt_rgb_flat)).item()
-    #     metrics_dict["nll"] = nll
-        
-    #     rgb_std_flat = rearrange(epist_std, "h w c -> (h w) c") + 0.01 # using 0.01 to assume 1 percent of the pixel colors are noise
-    #     m = torch.distributions.Normal(loc=0., scale=rgb_std_flat)
-    #     nll = -torch.mean(m.log_prob(predicted_rgb_flat - gt_rgb_flat)).item()
-    #     metrics_dict["nll_epist_var"] = nll
-    #     #### END NLL
+        # convert from homogeneous coordinates
+        xy = points2d[:, :2, :] / (points2d[:, 2:3, :] + self.eps)
+        xy = xy.view(points3d.shape[0], 2, self.height, self.width)
+        xy = xy.permute(0, 2, 3, 1)
 
-    #     return metrics_dict, images_dict
+        # normalization
+        if normalized:
+            xy[..., 0] /= self.width - 1
+            xy[..., 1] /= self.height - 1
+            xy = (xy - 0.5) * 2
+        return xy
 
+class Transformation3D(nn.Module):
+    """Layer which transform 3D points
+    """
+    def __init__(self):
+        super(Transformation3D, self).__init__()
+
+    def forward(self,
+                points: torch.Tensor,
+                T: torch.Tensor
+                ) -> torch.Tensor:
+        """
+        Args:
+            points (torch.Tensor, [N,4,(HxW)]): 3D points in homogeneous coordinates
+            T (torch.Tensor, [N,4,4]): transformation matrice
+        Returns:
+            transformed_points (torch.Tensor, [N,4,(HxW)]): 3D points in homogeneous coordinates
+        """
+        transformed_points = torch.matmul(T, points)
+        return transformed_points
+
+class Backprojection(nn.Module):
+    """Layer to backproject a depth image given the camera intrinsics
+
+    Attributes
+        xy (torch.tensor, [N,3,HxW]: homogeneous pixel coordinates on regular grid
+    """
+
+    def __init__(self, height, width):
+        """
+        Args:
+            height (int): image height
+            width (int): image width
+        """
+        super(Backprojection, self).__init__()
+
+        self.height = height
+        self.width = width
+
+        # generate regular grid
+        meshgrid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
+        id_coords = np.stack(meshgrid, axis=0).astype(np.float32)
+        id_coords = torch.tensor(id_coords)
+
+        # generate homogeneous pixel coordinates
+        self.ones = nn.Parameter(torch.ones(1, 1, self.height * self.width),
+                                 requires_grad=False)
+        self.xy = torch.unsqueeze(
+            torch.stack([id_coords[0].view(-1), id_coords[1].view(-1)], 0)
+            , 0)
+        self.xy = torch.cat([self.xy, self.ones], 1)
+        self.xy = nn.Parameter(self.xy, requires_grad=False)
+
+    def forward(self, depth, inv_K, img_like_out=False):
+        """
+        Args:
+            depth (torch.tensor, [N,1,H,W]: depth map
+            inv_K (torch.tensor, [N,4,4]): inverse camera intrinsics
+            img_like_out (bool): if True, the output shape is [N,4,H,W]; else [N,4,(HxW)]
+        Returns:
+            points (torch.tensor, [N,4,(HxW)]): 3D points in homogeneous coordinates
+        """
+        depth = depth.contiguous()
+
+        xy = self.xy.repeat(depth.shape[0], 1, 1)
+        ones = self.ones.repeat(depth.shape[0], 1, 1)
+
+        points = torch.matmul(inv_K[:, :3, :3], xy)
+        points = depth.view(depth.shape[0], 1, -1) * points
+        points = torch.cat([points, ones], 1)
+
+        if img_like_out:
+            points = points.reshape(depth.shape[0], 4, self.height, self.width)
+        return points
+
+class BackwardWarping(nn.Module):
+
+    def __init__(self,
+                 out_hw: Tuple[int,int],
+                 device: torch.device,
+                 K:torch.Tensor) -> None:
+        super(BackwardWarping,self).__init__()
+        height, width = out_hw
+        self.backproj = Backprojection(height,width).to(device)
+        self.projection = Projection(height,width).to(device)
+        self.transform3d = Transformation3D().to(device)
+
+        H,W = height,width
+        self.rgb = torch.zeros(H,W,3).view(-1,3).to(device)
+        self.depth = torch.zeros(H, W, 1).view(-1, 1).to(device)
+        self.K = K.to(device)
+        self.inv_K = torch.inverse(K).to(device)
+        self.K = self.K.unsqueeze(0)
+        self.inv_K = self.inv_K.unsqueeze(0) # 1,4,4
+    def forward(self,
+                img_src: torch.Tensor,
+                depth_src: torch.Tensor,
+                depth_tgt: torch.Tensor,
+                tgt2src_transform: torch.Tensor,
+                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        b, _, h, w = depth_tgt.shape
+
+        # reproject
+        pts3d_tgt = self.backproj(depth_tgt,self.inv_K)
+        pts3d_src = self.transform3d(pts3d_tgt,tgt2src_transform)
+        src_grid = self.projection(pts3d_src,self.K,normalized=True)
+        transformed_distance = pts3d_src[:, 2:3].view(b,1,h,w)
+
+        img_tgt = F.grid_sample(img_src, src_grid, mode = 'bilinear', padding_mode = 'zeros')
+        depth_src2tgt = F.grid_sample(depth_src, src_grid, mode='bilinear', padding_mode='zeros')
+
+        # rm invalid depth
+        valid_depth_mask = (transformed_distance < 1e6) & (depth_src2tgt > 0)
+
+        # rm invalid coords
+        vaild_coord_mask = (src_grid[...,0]> -1) & (src_grid[...,0] < 1) & (src_grid[...,1]> -1) & (src_grid[...,1] < 1)
+        vaild_coord_mask = vaild_coord_mask.unsqueeze(1)
+
+        valid_mask = valid_depth_mask & vaild_coord_mask
+        invaild_mask = ~valid_mask
+
+        return img_tgt.float(), depth_src2tgt.float(), invaild_mask.float()
+
+def extract_scene_center_and_c2w(depth, camera):
+    K_ = camera.get_intrinsics_matrices().squeeze() # 3x3
+    K = torch.eye(4).to(K_)
+    K[:3,:3] = K_
+    inv_K = torch.inverse(K).unsqueeze(0)
+    backproj_func = Backprojection(height=camera.image_height, width=camera.image_width)
+    depth_v = depth.clone()
+    depth_v = depth_v.unsqueeze(0).unsqueeze(0)
+    # mask = (depth_v < depth_v.max()).squeeze(0)
+    mask = (depth_v > 0.).squeeze(0)
+    point3d_camera = backproj_func(depth_v.cpu(), inv_K.cpu(), img_like_out=True).squeeze(0)
+    # C2W = torch.tensor(getView2World(view.R, view.T))
+    C2W_ = camera.camera_to_worlds[0].clone().squeeze(0) # (3,4)
+    C2W = torch.eye(4).to(C2W_)
+
+    point3d_world = C2W.cpu() @ point3d_camera.view(4, -1)
+    point3d_world = point3d_world.view(4, point3d_camera.shape[1], point3d_camera.shape[2])
+    expanded_mask = mask.expand_as(point3d_world)
+    selected = point3d_world.to(mask.device)[expanded_mask]
+    selected = selected.view(4, -1)
+    scene_center = selected.median(1).values[:3]
+
+    return scene_center, C2W

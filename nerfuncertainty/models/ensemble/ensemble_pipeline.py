@@ -156,8 +156,6 @@ class EnsemblePipeline(VanillaPipeline):
         for model in self.models:
             outputs_list.append(model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box))
 
-        cam = camera_ray_bundle
-
         outputs = {}
         for k in outputs_list[0].keys():
             elements = torch.stack([out[k] for out in outputs_list], dim=0)

@@ -40,10 +40,8 @@ import mediapy as media
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.cm import inferno
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from datetime import datetime
 
 from functools import partial
 
@@ -63,9 +61,12 @@ from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils import colormaps
 
 from nerfuncertainty.models.ensemble import ensemble_eval_setup
+from nerfuncertainty.models.vcurf import vcurf_eval_setup
+from nerfuncertainty.models.vcurf.vcurf_utils import *
 from nerfuncertainty.scripts.eval_configs import (
     EvalConfigs,
     EnsembleConfig,
+    VCURFConfig,
     LaplaceConfig,
     MCDropoutConfig,
     ActiveNerfactoConfig,
@@ -403,6 +404,7 @@ def get_unc_metrics_rgb(
     dict_output.update(auce_dict) # update dictionary with auce metrics
     return dict_output
 
+
 def negative_gaussian_loglikelihood(preds, targets, stds, eps=1e-6):
     stds_flat = stds.view(-1, 1) #+ eps 
     stds_flat = torch.maximum(stds_flat, torch.tensor([eps], device=stds_flat.device))
@@ -413,7 +415,7 @@ def negative_gaussian_loglikelihood(preds, targets, stds, eps=1e-6):
     neg_log_prob = -m.log_prob(targets_flat)
     return neg_log_prob
 
-
+# TODO：modify the estimation, if does not have depth gt, compute rgb err instead
 def get_unc_metrics_depth(
     img_num: int,
     outputs: Dict[str, torch.Tensor],
@@ -1088,6 +1090,12 @@ def main(eval_config: EvalConfigs):
     if isinstance(eval_config, EnsembleConfig):
         assert len(eval_config.load_config) > 1, "Ensemble requires at least two models."
         train_config, pipeline, checkpoint_path, _ = ensemble_eval_setup(eval_config.load_config)
+        get_outputs_for_camera_ray_bundle_fn = (
+            pipeline.get_ensemble_outputs_for_camera_ray_bundle
+        )
+
+    elif isinstance(eval_config, VCURFConfig):
+        train_config, pipeline, checkpoint_path, _ = vcurf_eval_setup(eval_config.load_config)
         get_outputs_for_camera_ray_bundle_fn = (
             pipeline.get_ensemble_outputs_for_camera_ray_bundle
         )

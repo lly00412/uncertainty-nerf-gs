@@ -67,9 +67,20 @@ class LaplaceConfig(EvalUncertainty):
 @dataclass
 class EnsembleConfig(EvalUncertainty):
     load_config: List[Path]
+
+    eval_depth: bool = False
     # List of paths to the trained model configurations. Must be a list of at
     # least two paths.
     
+@dataclass
+class VCURFConfig(EvalUncertainty):
+    eval_depth: bool = False
+
+    num_vcams: Optional[int] = 6
+
+    sampling_radii_depth_ratio: Optional[float] = 0.1
+
+    sampling_method: Literal["rgb", "depth"] = "rgb"
 
 @dataclass
 class MCDropoutConfig(EvalUncertainty):
@@ -99,6 +110,7 @@ class RobustNerfactoConfig(EvalUncertainty):
 EvalConfigs = Union[
     LaplaceConfig, 
     EnsembleConfig,
+    VCURFConfig,
     MCDropoutConfig,
     ActiveNerfactoConfig,
     ActiveSplatfactoConfig,
