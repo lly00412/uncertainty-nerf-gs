@@ -73,8 +73,10 @@ from nerfuncertainty.scripts.eval_configs import (
     ActiveSplatfactoConfig,
     RobustNerfactoConfig,
 )
-from nerfuncertainty.metrics import ause, auce, plot_auce_curves
-
+from nerfuncertainty.metrics import ause, auce, plot_auce_curves, auc
+from nerfuncertainty.models.activenerfacto.activenerfacto_model import ActiveNerfactoModel
+from nerfuncertainty.models.laplace.laplace_model import NerfactoLaplaceModel
+from nerfuncertainty.models.mcdropout.mcdropout_models import NerfactoMCDropoutModel
 
 def _set_random_seed(seed) -> None:
     """Set randomness seed in torch and numpy"""
@@ -92,6 +94,19 @@ def plot_errors(
     plt.plot(
         ratio_removed, ause_err_by_var - ause_err, "-g"
     )  # uncomment for getting plots similar to the paper, without visible oracle curve
+    path = output_path.parent / Path("plots")
+    path.mkdir(parents=True, exist_ok=True)
+    plt.savefig(path / Path(f"plot_{output}_{err_type}_{str(scene_no)}.png"))
+    plt.clf()
+    plt.close()
+
+def plot_ause(
+    ratio_removed,ause_dict, err_type, scene_no, output_path, output
+):
+    for err in ause_dict.keys():
+        plt.plot(
+            ratio_removed, ause_dict[err], "-g", label=err,
+        )  # uncomment for getting plots similar to the paper, without visible oracle curve
     path = output_path.parent / Path("plots")
     path.mkdir(parents=True, exist_ok=True)
     plt.savefig(path / Path(f"plot_{output}_{err_type}_{str(scene_no)}.png"))
@@ -315,13 +330,22 @@ def get_unc_metrics_rgb(
     min_rgb_std_for_nll: float = 3e-2,
 ):
     rgb_pred = outputs["rgb"]
-    rgb_std = outputs["rgb_std"] 
+    rgb_std = outputs["rgb_std"]
 
     rgb_gt = batch["image"].to(rgb_pred.device)
     if "background" in outputs.keys(): # used for splatfacto
         rgb_gt = model.composite_with_background(model.get_gt_img(rgb_gt), 
                                                 outputs["background"])
 
+    breakpoint()
+    if isinstance(model, ActiveNerfactoModel):
+        model_name = "activenerf"
+    elif isinstance(model, NerfactoLaplaceModel):
+        model_name = "laplace"
+    elif isinstance(model, NerfactoMCDropoutModel):
+        model_name = "mc-dropout"
+    else:
+        model_name = "nerfacto"
     
     rgb_pred_flat = rearrange(rgb_pred, "h w c -> (h w) c") 
     rgb_gt_flat = rearrange(rgb_gt, "h w c-> (h w) c")
@@ -332,11 +356,24 @@ def get_unc_metrics_rgb(
     rgb_var_flat = (rgb_std**2).flatten()
     # compaute average rgb variance for aleatoric experiment
     avg_rgb_var = rgb_var_flat.mean().item()
+    if "rgb_vc_std" in outputs.keys():
+        rgb_vc_std = outputs["rgb_vc_std"]
+        rgb_vc_var_flat = (rgb_vc_std ** 2).flatten()
+        avg_rgb_vc_var = rgb_vc_var_flat.mean().item()
 
     # area under the sparsification error (AUSE) curve
-    ratio, err_mae, err_var_mae, ause_mae = ause(
+    # ratio, err_mae, err_var_mae, ause_mae = ause(
+    #     rgb_var_flat, absolute_error_flat, err_type="mae"
+    # )
+
+    ratio, err_mae, err_var_mae, auc_mae_by_var, auc_mae_by_opt = auc(
         rgb_var_flat, absolute_error_flat, err_type="mae"
     )
+
+    if 'rgb_vc_std' in outputs.keys():
+        _, _, err_vc_var_mae, auc_by_vc_var, _ = auc(
+            rgb_vc_var_flat, absolute_error_flat, err_type="mae"
+        )
 
     """
     if plot_img_ause:
@@ -345,9 +382,19 @@ def get_unc_metrics_rgb(
         )
     """
 
-    ratio, err_mse, err_var_mse, ause_mse = ause(
+    # ratio, err_mse, err_var_mse, ause_mse = ause(
+    #     rgb_var_flat, squared_error_flat, err_type="mse"
+    # )
+
+    ratio, err_mse, err_var_mse, auc_mse_by_var, auc_mse_by_opt = auc(
         rgb_var_flat, squared_error_flat, err_type="mse"
     )
+
+    if 'rgb_vc_std' in outputs.keys():
+        _, _, err_vc_var_mse, auc_mse_by_vc_var, _ = auc(
+            rgb_vc_var_flat, squared_error_flat, err_type="mse"
+        )
+
 
     """
     if plot_img_ause:
@@ -356,9 +403,18 @@ def get_unc_metrics_rgb(
         )
     """
 
-    ratio, err_rmse, err_var_rmse, ause_rmse = ause(
+    # ratio, err_rmse, err_var_rmse, ause_rmse = ause(
+    #     rgb_var_flat, squared_error_flat, err_type="rmse"
+    # )
+    ratio, err_rmse, err_var_rmse, auc_rmse_by_var, auc_rmse_by_opt = auc(
         rgb_var_flat, squared_error_flat, err_type="rmse"
     )
+
+    if 'rgb_vc_std' in outputs.keys():
+        _, _, err_vc_var_rmse, auc_rmse_by_vc_var, _ = auc(
+            rgb_vc_var_flat, squared_error_flat, err_type="rmse"
+        )
+
     """
     if plot_img_ause:
         plot_errors(
@@ -368,7 +424,10 @@ def get_unc_metrics_rgb(
     # negative log-likelihood 
     neg_log_prob = negative_gaussian_loglikelihood(rgb_pred_flat, rgb_gt_flat, rgb_std, eps=min_rgb_std_for_nll)
     nll_rgb = torch.mean(neg_log_prob).item()
-    # print(f"nll_rgb {nll_rgb}")
+
+    if 'rgb_vc_std' in outputs.keys():
+        neg_log_vc_prob = negative_gaussian_loglikelihood(rgb_pred_flat, rgb_gt_flat, rgb_vc_std, eps=min_rgb_std_for_nll)
+        nll_vc_rgb = torch.mean(neg_log_vc_prob).item()
 
     # area under the calibration error (AUCE) curve
     rgb_std_flat = rgb_var_flat.sqrt()
@@ -381,6 +440,17 @@ def get_unc_metrics_rgb(
                      target_values=rgb_gt_flat.cpu().numpy())
     absolute_error_img = torch.clip(absolute_error, min=0.0, max=1.0)
 
+    if 'rgb_vc_std' in outputs.keys():
+        rgb_vc_std_flat = rgb_vc_var_flat.sqrt()
+        if len(rgb_vc_std_flat.shape) == 1:
+            # copy std along RGB channels
+            rgb_vc_std_flat = rgb_vc_std_flat.unsqueeze(-1).repeat(1, 3)
+
+        auce_vc_dict = auce(mean_values=rgb_pred_flat.cpu().numpy(),
+                         sigma_values=rgb_vc_std_flat.cpu().numpy(),
+                         target_values=rgb_gt_flat.cpu().numpy())
+
+    # TODO: modify outputs as vc results + baseline
     dict_output = {
         "nll_rgb": nll_rgb,
         "ause_mse": ause_mse,

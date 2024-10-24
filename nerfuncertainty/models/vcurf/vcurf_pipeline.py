@@ -127,7 +127,7 @@ class VCURFPipeline(VanillaPipeline):
         vir2rd_depth = torch.zeros_like(rd_depth)
         vir2rd_depth[numels > 0] = vir2rd_depth_sum[numels > 0] / numels[numels > 0]
         depth_l2 = (rd_depth - vir2rd_depth) ** 2
-        depth_l2 = depth_l2.squeeze(0)
+        depth_std = torch.sqrt(depth_l2).squeeze(0)
 
         # rgb uncertainty
         vir2rd_pred_sum = vir2rd_pred_imgs.sum(0).mean(0, keepdim=True)
@@ -135,21 +135,24 @@ class VCURFPipeline(VanillaPipeline):
         vir2rd_pred = torch.zeros_like(rendering_)
         vir2rd_pred[numels > 0] = vir2rd_pred_sum[numels > 0] / numels[numels > 0]
         rgb_l2 = (rendering_ - vir2rd_pred) ** 2
-        rgb_l2 = rgb_l2.squeeze(0)
-
-        if 'rgb_std' in outputs.keys():
-            outputs['rgb_vc_std'] = rgb_l2.unsqueeze(-1)
-        else:
-            outputs['rgb_std'] = rgb_l2.unsqueeze(-1)
+        rgb_std = torch.sqrt(rgb_l2).squeeze(0)
 
         if 'depth_std' in outputs.keys():
-            outputs['depth_vc_std'] = depth_l2.unsqueeze(-1)
+            outputs['depth_vc_std'] = depth_std.unsqueeze(-1)
         else:
-            outputs['depth_std'] = depth_l2.unsqueeze(-1)
+            outputs['depth_std'] = depth_std.unsqueeze(-1)
+
+        if 'rgb_std' in outputs.keys():
+            outputs['rgb_vc_std'] = rgb_std.unsqueeze(-1)
+        else:
+            outputs['rgb_std'] = rgb_std.unsqueeze(-1)
 
 
         if self.sampling_method == 'depth':
-            outputs['rgb_std'] = outputs['depth_std']
+            if 'rgb_vc_std' in outputs.keys():
+                outputs['rgb_vc_std'] = outputs['depth_vc_std']
+            else:
+                outputs['rgb_std'] = outputs['depth_std']
 
         return outputs
     

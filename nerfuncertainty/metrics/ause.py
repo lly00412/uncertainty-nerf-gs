@@ -42,3 +42,43 @@ def ause(unc_vec, err_vec, err_type="rmse"):
     ause_err_by_var = np.array(ause_err_by_var)
     ause = np.trapz(ause_err_by_var - ause_err, ratio_removed)
     return ratio_removed, ause_err, ause_err_by_var, ause
+
+def auc(unc_vec, err_vec, err_type="rmse"):
+    ratio_removed = np.linspace(0, 1, 100, endpoint=False)
+    # Sort the error
+    err_vec_sorted, _ = torch.sort(err_vec)
+
+    # Calculate the error when removing a fraction pixels with error
+    n_valid_pixels = len(err_vec)
+    ause_err = []
+    for r in ratio_removed:
+        err_slice = err_vec_sorted[0 : int((1 - r) * n_valid_pixels)]
+        if err_type == "rmse":
+            ause_err.append(torch.sqrt(err_slice.mean()).cpu().numpy())
+        elif err_type == "mae" or err_type == "mse":
+            ause_err.append(err_slice.mean().cpu().numpy())
+
+    ###########################################
+
+    # Sort by variance
+    _, var_vec_sorted_idxs = torch.sort(unc_vec)
+    # Sort error by variance
+    err_vec_sorted_by_var = err_vec[var_vec_sorted_idxs]
+    ause_err_by_var = np.zeros(len(ratio_removed))
+    for i, r in enumerate(ratio_removed):
+        err_slice = err_vec_sorted_by_var[0 : int((1 - r) * n_valid_pixels)]
+        if err_type == "rmse":
+            ause_err_by_var[i] = torch.sqrt(err_slice.mean()).cpu().numpy()
+        elif err_type == "mae" or err_type == "mse":
+            ause_err_by_var[i] = err_slice.mean().cpu().numpy()
+
+    # Normalize and append
+    max_val = max(max(ause_err), max(ause_err_by_var))
+    ause_err = ause_err / max_val
+    ause_err = np.array(ause_err)
+
+    ause_err_by_var = ause_err_by_var / max_val
+    ause_err_by_var = np.array(ause_err_by_var)
+    auc_by_var = np.trapz(ause_err_by_var, ratio_removed)
+    auc_by_opt = np.trapz(ause_err, ratio_removed)
+    return ratio_removed, ause_err, ause_err_by_var, auc_by_var, auc_by_opt
