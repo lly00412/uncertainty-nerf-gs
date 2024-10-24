@@ -73,7 +73,7 @@ from nerfuncertainty.scripts.eval_configs import (
     ActiveSplatfactoConfig,
     RobustNerfactoConfig,
 )
-from nerfuncertainty.metrics import ause, auce, plot_auce_curves, auc
+from nerfuncertainty.metrics import ause, auce, plot_auce_curves, auc, plot_auces
 from nerfuncertainty.models.activenerfacto.activenerfacto_model import ActiveNerfactoModel
 from nerfuncertainty.models.laplace.laplace_model import NerfactoLaplaceModel
 from nerfuncertainty.models.mcdropout.mcdropout_models import NerfactoMCDropoutModel
@@ -105,8 +105,9 @@ def plot_ause(
 ):
     for err in ause_dict.keys():
         plt.plot(
-            ratio_removed, ause_dict[err], "-g", label=err,
+            ratio_removed, ause_dict[err], label=err,
         )  # uncomment for getting plots similar to the paper, without visible oracle curve
+    plt.legend()
     path = output_path.parent / Path("plots")
     path.mkdir(parents=True, exist_ok=True)
     plt.savefig(path / Path(f"plot_{output}_{err_type}_{str(scene_no)}.png"))
@@ -234,6 +235,7 @@ def save_imgs_rgb(
     max_nll: float = 10.,
     unc_max: float = 1.0,
     unc_min: float = 0.0,
+    rgb_vc_std =  None,
 ):
     
     fig, ax = plt.subplots(1)
@@ -288,33 +290,35 @@ def save_imgs_rgb(
     fname = output_path /  Path(f"{img_num}_rgb_std.png")
     # fig.savefig(fname, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
-    
+
+    rgb_std = media.to_rgb(rgb_std.squeeze(-1).cpu().numpy(), cmap='jet')
+    media.write_image(fname, rgb_std)
+
+    if rgb_vc_std is not None:
+        fig, ax = plt.subplots(1)
+        # im = ax.imshow(rgb_std.cpu().numpy(), cmap="inferno")
+        # im = ax.imshow(rgb_std.cpu().numpy(), cmap="Greys")
+        # clip and normalize uncertainty values
+        rgb_vc_std = torch.clip((rgb_vc_std - np.minimum(unc_min, unc_max)) / np.abs(unc_max - unc_min), 0, 1)
+        im = ax.imshow(rgb_vc_std.cpu().numpy(), cmap="jet")
+        divider = make_axes_locatable(ax)
+        # cax = divider.append_axes("right", size="5%", pad=0.05)
+        # fig.colorbar(im, cax=cax)
+        ax.axis("off")
+        # ax.set_title("Std. Deviation")
+        fname = output_path / Path(f"{img_num}_rgb_vc_std.png")
+        # fig.savefig(fname, dpi=300, bbox_inches='tight', pad_inches=0)
+        plt.close()
+
+        rgb_vc_std = media.to_rgb(rgb_vc_std.squeeze(-1).cpu().numpy(), cmap='jet')
+        media.write_image(fname, rgb_vc_std)
+
     # save_img(rgb_std, fname)
     
     # only squeeze last dim if last dimension is just the value, but now when we have colored the uncertainty
-    # rgb_std = rgb_std.squeeze(-1) if len(rgb_std.size())==3 else rgb_std 
-    rgb_std = media.to_rgb(rgb_std.squeeze(-1).cpu().numpy(), cmap='jet')
-    media.write_image(fname, rgb_std)
-    
-    # rgb_std_colored = media.to_rgb(rgb_std.cpu().numpy(), vmin=0.0, vmax=0.5, cmap='jet')
-    # fname = output_path /  Path(f"{img_num}_rgb_std_colored.{img_file_type}")
-    # media.write_image(fname, rgb_std_colored)
-    
-    # # neg_log_prob = torch.clip(neg_log_prob.mean(-1), 
-    # #                           max=max_nll)
-    # # fig, ax = plt.subplots(1)
-    # # im = ax.imshow(neg_log_prob.cpu().numpy(), 
-    # #            cmap="inferno")
-    # # divider = make_axes_locatable(ax)
-    # # cax = divider.append_axes("right", size="5%", pad=0.05)
-    # # fig.colorbar(im, cax=cax)
-    # # ax.axis("off")
-    # # ax.set_title("RGB NLL")
-    # fname = output_path /  Path(f"{img_num}_rgb_nll.png")
-    # # fig.savefig(fname, dpi=300, bbox_inches='tight', pad_inches=0)
-    # # plt.close()
+    # rgb_std = rgb_std.squeeze(-1) if len(rgb_std.size())==3 else rgb_std
 
-    # media.write_image(fname, neg_log_prob.mean(-1).cpu().numpy())
+
     
     
 
@@ -336,16 +340,6 @@ def get_unc_metrics_rgb(
     if "background" in outputs.keys(): # used for splatfacto
         rgb_gt = model.composite_with_background(model.get_gt_img(rgb_gt), 
                                                 outputs["background"])
-
-    breakpoint()
-    if isinstance(model, ActiveNerfactoModel):
-        model_name = "activenerf"
-    elif isinstance(model, NerfactoLaplaceModel):
-        model_name = "laplace"
-    elif isinstance(model, NerfactoMCDropoutModel):
-        model_name = "mc-dropout"
-    else:
-        model_name = "nerfacto"
     
     rgb_pred_flat = rearrange(rgb_pred, "h w c -> (h w) c") 
     rgb_gt_flat = rearrange(rgb_gt, "h w c-> (h w) c")
@@ -366,14 +360,15 @@ def get_unc_metrics_rgb(
     #     rgb_var_flat, absolute_error_flat, err_type="mae"
     # )
 
-    ratio, err_mae, err_var_mae, auc_mae_by_var, auc_mae_by_opt = auc(
-        rgb_var_flat, absolute_error_flat, err_type="mae"
-    )
 
-    if 'rgb_vc_std' in outputs.keys():
-        _, _, err_vc_var_mae, auc_by_vc_var, _ = auc(
-            rgb_vc_var_flat, absolute_error_flat, err_type="mae"
-        )
+
+    ratio, err_mae, err_var_mae, err_vc_var_mae, \
+        auc_mae_by_opt, auc_mae_by_var, auc_mae_by_vc_var = auc(
+        unc_vec= rgb_var_flat,
+        err_vec= absolute_error_flat,
+        vc_unc_vec= rgb_vc_var_flat if 'rgb_vc_std' in outputs.keys() else None,
+        err_type="mae"
+    )
 
     """
     if plot_img_ause:
@@ -386,14 +381,13 @@ def get_unc_metrics_rgb(
     #     rgb_var_flat, squared_error_flat, err_type="mse"
     # )
 
-    ratio, err_mse, err_var_mse, auc_mse_by_var, auc_mse_by_opt = auc(
-        rgb_var_flat, squared_error_flat, err_type="mse"
+    ratio, err_mse, err_var_mse, err_vc_var_mse, \
+        auc_mse_by_opt, auc_mse_by_var, auc_mse_by_vc_var = auc(
+        unc_vec=rgb_var_flat,
+        err_vec=absolute_error_flat,
+        vc_unc_vec=rgb_vc_var_flat if 'rgb_vc_std' in outputs.keys() else None,
+        err_type="mse"
     )
-
-    if 'rgb_vc_std' in outputs.keys():
-        _, _, err_vc_var_mse, auc_mse_by_vc_var, _ = auc(
-            rgb_vc_var_flat, squared_error_flat, err_type="mse"
-        )
 
 
     """
@@ -406,14 +400,13 @@ def get_unc_metrics_rgb(
     # ratio, err_rmse, err_var_rmse, ause_rmse = ause(
     #     rgb_var_flat, squared_error_flat, err_type="rmse"
     # )
-    ratio, err_rmse, err_var_rmse, auc_rmse_by_var, auc_rmse_by_opt = auc(
-        rgb_var_flat, squared_error_flat, err_type="rmse"
+    ratio, err_rmse, err_var_rmse, err_vc_var_rmse, \
+        auc_rmse_by_opt, auc_rmse_by_var, auc_rmse_by_vc_var = auc(
+        unc_vec=rgb_var_flat,
+        err_vec=absolute_error_flat,
+        vc_unc_vec=rgb_vc_var_flat if 'rgb_vc_std' in outputs.keys() else None,
+        err_type="rmse"
     )
-
-    if 'rgb_vc_std' in outputs.keys():
-        _, _, err_vc_var_rmse, auc_rmse_by_vc_var, _ = auc(
-            rgb_vc_var_flat, squared_error_flat, err_type="rmse"
-        )
 
     """
     if plot_img_ause:
@@ -453,9 +446,12 @@ def get_unc_metrics_rgb(
     # TODO: modify outputs as vc results + baseline
     dict_output = {
         "nll_rgb": nll_rgb,
-        "ause_mse": ause_mse,
-        "ause_rmse": ause_rmse,
-        "ause_mae": ause_mae,
+        "ause_mse_by_opt": auc_mse_by_opt,
+        "ause_rmse_by_opt": auc_rmse_by_opt,
+        "ause_mae_by_opt": auc_mae_by_opt,
+        "ause_mse_by_var": auc_mse_by_var,
+        "ause_rmse_by_var": auc_rmse_by_var,
+        "ause_mae_by_var": auc_mae_by_var,
         # To plot the average values of the ause on the test set
         "err_mse": err_mse,
         "err_rmse": err_rmse,
@@ -472,6 +468,22 @@ def get_unc_metrics_rgb(
         "avg_var": avg_rgb_var, 
     }
     dict_output.update(auce_dict) # update dictionary with auce metrics
+    if 'rgb_vc_std' in outputs.keys():
+        vc_dict = {
+            "nll_vc_rgb": nll_vc_rgb,
+            "ause_mse_by_vc_var": auc_mse_by_vc_var,
+            "ause_rmse_by_vc_var": auc_rmse_by_vc_var,
+            "ause_mae_by_vc_var": auc_mae_by_vc_var,
+            "err_vc_var_mse": err_vc_var_mse,
+            "err_vc_var_rmse": err_vc_var_rmse,
+            "err_vc_var_mae": err_vc_var_mae,
+            "neg_log_vc_prob": neg_log_vc_prob.reshape(rgb_pred.shape),
+            "avg_vc_var": avg_rgb_vc_var,
+        }
+        for k in auce_vc_dict.keys():
+            vc_dict[f'{k}_vc'] = auce_vc_dict[k]
+        dict_output.update(vc_dict)
+
     return dict_output
 
 
@@ -732,6 +744,17 @@ def get_image_metrics_and_images_unc(
     unc_max: float = 1.0,
     unc_min: float = 0.0,
 ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
+
+    # if isinstance(model, ActiveNerfactoModel):
+    #     model_name = "activenerf"
+    # elif isinstance(model, NerfactoLaplaceModel):
+    #     model_name = "laplace"
+    # elif isinstance(model, NerfactoMCDropoutModel):
+    #     model_name = "mc-dropout"
+    # else:
+    #     model_name = "nerfacto"
+
+
     image = batch["image"].to(model.device)
     rgb = outputs["rgb"]
 
@@ -826,6 +849,7 @@ def get_image_metrics_and_images_unc(
         )
 
     if eval_rgb_unc:
+        # TODO: try to sort ssim for uncertainty
         rgb_unc_dict = get_unc_metrics_rgb(
             model=model,
             img_num=img_num,
@@ -836,27 +860,46 @@ def get_image_metrics_and_images_unc(
             #plot_img_ause=plot_img_ause,
             min_rgb_std_for_nll=min_rgb_std_for_nll,
         )
-        metrics_dict["rgb_ause_mse"] = float(rgb_unc_dict["ause_mse"])
-        metrics_dict["rgb_ause_mae"] = float(rgb_unc_dict["ause_mae"])
-        metrics_dict["rgb_ause_rmse"] = float(rgb_unc_dict["ause_rmse"])
+        metrics_dict["rgb_ause_mse_by_opt"] = float(rgb_unc_dict["ause_mse_by_opt"])
+        metrics_dict["rgb_ause_mae_by_opt"] = float(rgb_unc_dict["ause_mae_by_opt"])
+        metrics_dict["rgb_ause_rmse_by_opt"] = float(rgb_unc_dict["ause_rmse_by_opt"])
+        metrics_dict["rgb_ause_mse_by_var"] = float(rgb_unc_dict["ause_mse_by_var"])
+        metrics_dict["rgb_ause_mae_by_var"] = float(rgb_unc_dict["ause_mae_by_var"])
+        metrics_dict["rgb_ause_rmse_by_var"] = float(rgb_unc_dict["ause_rmse_by_var"])
+        if 'rgb_vc_std' in outputs.keys():
+            metrics_dict["rgb_ause_mse_by_vc_var"] = float(rgb_unc_dict["ause_mse_by_vc_var"])
+            metrics_dict["rgb_ause_mae_by_vc_var"] = float(rgb_unc_dict["ause_mae_by_vc_var"])
+            metrics_dict["rgb_ause_rmse_by_vc_var"] = float(rgb_unc_dict["ause_rmse_by_vc_var"])
+
         metrics_dict["rgb_mse"] = float(rgb_unc_dict["mse"].mean().item())
         metrics_dict["rgb_rmse"] = float(np.sqrt(rgb_unc_dict["mse"].mean().item()))
         metrics_dict["rgb_nll"] = float(rgb_unc_dict["nll_rgb"])
         metrics_dict["rgb_avg_var"] = float(rgb_unc_dict["avg_var"])
+        if 'rgb_vc_std' in outputs.keys():
+            metrics_dict["rgb_vc_nll"] = float(rgb_unc_dict["nll_vc_rgb"])
+            metrics_dict["rgb_avg_vc_var"] = float(rgb_unc_dict["avg_vc_var"])
         
         # auce metrics
-        metrics_dict["rgb_auc_abs_error"] = rgb_unc_dict["auc_abs_error_values"]
-        metrics_dict["rgb_auc_length"] = rgb_unc_dict["auc_length_values"]
-        metrics_dict["rgb_auc_neg_error"] = rgb_unc_dict["auc_neg_error_values"]
+        metrics_dict["rgb_auce_abs_error"] = rgb_unc_dict["auc_abs_error_values"]
+        metrics_dict["rgb_auce_length"] = rgb_unc_dict["auc_length_values"]
+        metrics_dict["rgb_auce_neg_error"] = rgb_unc_dict["auc_neg_error_values"]
+        if 'rgb_vc_std' in outputs.keys():
+            metrics_dict["rgb_auce_abs_error_vc"] = rgb_unc_dict["auc_abs_error_values_vc"]
+            metrics_dict["rgb_auce_length_vc"] = rgb_unc_dict["auc_length_values_vc"]
+            metrics_dict["rgb_auce_neg_error_vc"] = rgb_unc_dict["auc_neg_error_values_vc"]
 
         # This part of the metrics dict is needed to compute the global ause on
         # the test set.
-        ause_dict["rgb_all_ause_mse"] = rgb_unc_dict["err_mse"]
-        ause_dict["rgb_all_ause_rmse"] = rgb_unc_dict["err_rmse"]
-        ause_dict["rgb_all_ause_mae"] = rgb_unc_dict["err_mae"]
-        ause_dict["rgb_all_var_ause_mse"] = rgb_unc_dict["err_var_mse"]
-        ause_dict["rgb_all_var_ause_rmse"] = rgb_unc_dict["err_var_rmse"]
-        ause_dict["rgb_all_var_ause_mae"] = rgb_unc_dict["err_var_mae"]
+        ause_dict["rgb_all_ause_mse_by_opt"] = rgb_unc_dict["err_mse"]
+        ause_dict["rgb_all_ause_rmse_by_opt"] = rgb_unc_dict["err_rmse"]
+        ause_dict["rgb_all_ause_mae_by_opt"] = rgb_unc_dict["err_mae"]
+        ause_dict["rgb_all_ause_mse_by_var"] = rgb_unc_dict["err_var_mse"]
+        ause_dict["rgb_all_ause_rmse_by_var"] = rgb_unc_dict["err_var_rmse"]
+        ause_dict["rgb_all_ause_mae_by_var"] = rgb_unc_dict["err_var_mae"]
+        if 'rgb_vc_std' in outputs.keys():
+            ause_dict["rgb_all_ause_mse_by_vc_var"] = rgb_unc_dict["err_vc_var_mse"]
+            ause_dict["rgb_all_ause_rmse_by_vc_var"] = rgb_unc_dict["err_vc_var_rmse"]
+            ause_dict["rgb_all_ause_mae_by_vc_var"] = rgb_unc_dict["err_vc_var_mae"]
         
         # print(rgb_unc_dict["coverage_values"].shape, 
         #       rgb_unc_dict["avg_length_values"].shape, 
@@ -869,6 +912,12 @@ def get_image_metrics_and_images_unc(
         ause_dict["rgb_all_auce_coverage_error_values"] = rgb_unc_dict["coverage_error_values"]
         ause_dict["rgb_all_auce_abs_coverage_error_values"] = rgb_unc_dict["abs_coverage_error_values"]
         ause_dict["rgb_all_auce_neg_coverage_error_values"] = rgb_unc_dict["neg_coverage_error_values"]
+        if 'rgb_vc_std' in outputs.keys():
+            ause_dict["rgb_all_auce_coverage_values_vc"] = rgb_unc_dict["coverage_values_vc"]
+            ause_dict["rgb_all_auce_avg_length_values_vc"] = rgb_unc_dict["avg_length_values_vc"]
+            ause_dict["rgb_all_auce_coverage_error_values_vc"] = rgb_unc_dict["coverage_error_values_vc"]
+            ause_dict["rgb_all_auce_abs_coverage_error_values_vc"] = rgb_unc_dict["abs_coverage_error_values_vc"]
+            ause_dict["rgb_all_auce_neg_coverage_error_values_vc"] = rgb_unc_dict["neg_coverage_error_values_vc"]
 
         if save_rendered_images:
             save_imgs_rgb(
@@ -882,6 +931,7 @@ def get_image_metrics_and_images_unc(
                 neg_log_prob=rgb_unc_dict["neg_log_prob"],
                 unc_max=unc_max,
                 unc_min=unc_min,
+                rgb_vc_std= outputs["rgb_vc_std"] if "rgb_vc_std" in outputs.keys() else None,
             )
 
     return metrics_dict, images_dict, ause_dict
@@ -892,7 +942,7 @@ def get_average_uncertainty_metrics(
     get_outputs_for_camera_ray_bundle: Callable,
     eval_depth_unc: bool = True,
     eval_rgb_unc: bool = True,
-    plot_ause: bool = False,
+    plot_ause_img: bool = False,
     save_rendered_images: bool = False,
     min_rgb_std_for_nll: float = 3e-2,
     min_depth_std_for_nll: float = 1.0,
@@ -914,6 +964,16 @@ def get_average_uncertainty_metrics(
     #     get_image_metrics_and_images_unc, self.model
     # )
 
+    if isinstance(self.model, ActiveNerfactoModel):
+        model_name = "activenerf"
+    elif isinstance(self.model, NerfactoLaplaceModel):
+        model_name = "laplace"
+    elif isinstance(self.model, NerfactoMCDropoutModel):
+        model_name = "mc-dropout"
+    else:
+        model_name = "nerfacto"
+
+
     with Progress(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -934,12 +994,16 @@ def get_average_uncertainty_metrics(
         depth_err_var_mse_all = np.zeros(100)
         depth_err_var_rmse_all = np.zeros(100)
 
-        rgb_err_mae_all = np.zeros(100)
-        rgb_err_mse_all = np.zeros(100)
-        rgb_err_rmse_all = np.zeros(100)
-        rgb_err_var_mae_all = np.zeros(100)
-        rgb_err_var_mse_all = np.zeros(100)
-        rgb_err_var_rmse_all = np.zeros(100)
+        rgb_err_mae_all = np.zeros(101)
+        rgb_err_mse_all = np.zeros(101)
+        rgb_err_rmse_all = np.zeros(101)
+        rgb_err_var_mae_all = np.zeros(101)
+        rgb_err_var_mse_all = np.zeros(101)
+        rgb_err_var_rmse_all = np.zeros(101)
+        rgb_err_vc_var_mae_all = np.zeros(101)
+        rgb_err_vc_var_mse_all = np.zeros(101)
+        rgb_err_vc_var_rmse_all = np.zeros(101)
+
         
         # for plotting auce values
         # depth_all_coverage_values = np.zeros(100)
@@ -965,6 +1029,12 @@ def get_average_uncertainty_metrics(
         rgb_all_coverage_error_values = np.zeros(99)
         rgb_all_abs_coverage_error_values = np.zeros(99)
         rgb_all_neg_coverage_error_values = np.zeros(99)
+
+        rgb_all_coverage_values_vc = np.zeros(99)
+        rgb_all_avg_length_values_vc = np.zeros(99)
+        rgb_all_coverage_error_values_vc = np.zeros(99)
+        rgb_all_abs_coverage_error_values_vc = np.zeros(99)
+        rgb_all_neg_coverage_error_values_vc = np.zeros(99)
         
 
         for camera, batch in self.datamanager.fixed_indices_eval_dataloader:
@@ -1006,18 +1076,29 @@ def get_average_uncertainty_metrics(
                 depth_all_neg_coverage_error_values += ause_dict["depth_all_auce_neg_coverage_error_values"]
 
             if eval_rgb_unc:
-                rgb_err_mae_all += ause_dict["rgb_all_ause_mae"]
-                rgb_err_mse_all += ause_dict["rgb_all_ause_mse"]
-                rgb_err_rmse_all += ause_dict["rgb_all_ause_rmse"]
-                rgb_err_var_mae_all += ause_dict["rgb_all_var_ause_mae"]
-                rgb_err_var_mse_all += ause_dict["rgb_all_var_ause_mse"]
-                rgb_err_var_rmse_all += ause_dict["rgb_all_var_ause_rmse"]
+                rgb_err_mae_all += ause_dict["rgb_all_ause_mae_by_opt"]
+                rgb_err_mse_all += ause_dict["rgb_all_ause_mse_by_opt"]
+                rgb_err_rmse_all += ause_dict["rgb_all_ause_rmse_by_opt"]
+                rgb_err_var_mae_all += ause_dict["rgb_all_ause_mae_by_var"]
+                rgb_err_var_mse_all += ause_dict["rgb_all_ause_mse_by_var"]
+                rgb_err_var_rmse_all += ause_dict["rgb_all_ause_rmse_by_var"]
                 
                 rgb_all_coverage_values += ause_dict["rgb_all_auce_coverage_values"]
                 rgb_all_avg_length_values += ause_dict["rgb_all_auce_avg_length_values"]
                 rgb_all_coverage_error_values += ause_dict["rgb_all_auce_coverage_error_values"]
                 rgb_all_abs_coverage_error_values += ause_dict["rgb_all_auce_abs_coverage_error_values"]
                 rgb_all_neg_coverage_error_values += ause_dict["rgb_all_auce_neg_coverage_error_values"]
+
+                if "rgb_all_ause_mae_by_vc_var" in ause_dict.keys():
+                    rgb_err_vc_var_mae_all += ause_dict["rgb_all_ause_mae_by_vc_var"]
+                    rgb_err_vc_var_mse_all += ause_dict["rgb_all_ause_mse_by_vc_var"]
+                    rgb_err_vc_var_rmse_all += ause_dict["rgb_all_ause_rmse_by_vc_var"]
+
+                    rgb_all_coverage_values_vc += ause_dict["rgb_all_auce_coverage_values_vc"]
+                    rgb_all_avg_length_values_vc += ause_dict["rgb_all_auce_avg_length_values_vc"]
+                    rgb_all_coverage_error_values_vc += ause_dict["rgb_all_auce_coverage_error_values_vc"]
+                    rgb_all_abs_coverage_error_values_vc += ause_dict["rgb_all_auce_abs_coverage_error_values_vc"]
+                    rgb_all_neg_coverage_error_values_vc += ause_dict["rgb_all_auce_neg_coverage_error_values_vc"]
 
             assert "num_rays_per_sec" not in metrics_dict
             metrics_dict["num_rays_per_sec"] = num_rays / (time() - inner_start)
@@ -1029,7 +1110,7 @@ def get_average_uncertainty_metrics(
             progress.advance(task)
 
     if eval_depth_unc:
-        ratio_all = np.linspace(0, 1, 100, endpoint=False)
+        ratio_all = np.linspace(0, 1, 100+1, endpoint=True)
         err_mae_all = depth_err_mae_all / num_images
         err_mse_all = depth_err_mse_all / num_images
         err_rmse_all = depth_err_rmse_all / num_images
@@ -1085,7 +1166,7 @@ def get_average_uncertainty_metrics(
                          output="depth")
         
     if eval_rgb_unc:
-        ratio_all = np.linspace(0, 1, 100, endpoint=False)
+        ratio_all = np.linspace(0, 1, 100+1, endpoint=True)
         err_mae_all = rgb_err_mae_all / num_images
         err_mse_all = rgb_err_mse_all / num_images
         err_rmse_all = rgb_err_rmse_all / num_images
@@ -1094,30 +1175,77 @@ def get_average_uncertainty_metrics(
         err_var_mse_all = rgb_err_var_mse_all / num_images
         err_var_rmse_all = rgb_err_var_rmse_all / num_images
 
+        ause_mae_dict = {
+            'opt': err_mae_all,
+            model_name: err_var_mae_all,
+        }
+        ause_mse_dict = {
+            'opt': err_mse_all,
+            model_name: err_var_mse_all,
+        }
+        ause_rmse_dict = {
+            'opt': err_rmse_all,
+            model_name: err_var_rmse_all,
+        }
+
+        if "rgb_all_ause_mae_by_vc_var" in ause_dict.keys():
+            err_vc_var_mae_all = rgb_err_vc_var_mae_all / num_images
+            err_vc_var_mse_all = rgb_err_vc_var_mse_all / num_images
+            err_vc_var_rmse_all = rgb_err_vc_var_rmse_all / num_images
+
+            ause_mae_dict['vcurf'] =  err_vc_var_mae_all
+            ause_mse_dict['vcurf'] = err_vc_var_mse_all
+            ause_rmse_dict['vcurf'] = err_vc_var_rmse_all
+
+
         if save_rendered_images:
-            plot_errors(
+            # plot_errors(
+            #     ratio_all,
+            #     err_mse_all,
+            #     err_var_mse_all,
+            #     "mse",
+            #     "all",
+            #     self.model.output_path,
+            #     output="rgb",
+            # )
+            # plot_errors(
+            #     ratio_all,
+            #     err_rmse_all,
+            #     err_var_rmse_all,
+            #     "rmse",
+            #     "all",
+            #     self.model.output_path,
+            #     output="rgb",
+            # )
+            # plot_errors(
+            #     ratio_all,
+            #     err_mae_all,
+            #     err_var_mae_all,
+            #     "mae",
+            #     "all",
+            #     self.model.output_path,
+            #     output="rgb",
+            # )
+            plot_ause(
                 ratio_all,
-                err_mse_all,
-                err_var_mse_all,
-                "mse",
+                ause_mae_dict,
+                "mae",
                 "all",
                 self.model.output_path,
                 output="rgb",
             )
-            plot_errors(
+            plot_ause(
                 ratio_all,
-                err_rmse_all,
-                err_var_rmse_all,
+                ause_rmse_dict,
                 "rmse",
                 "all",
                 self.model.output_path,
                 output="rgb",
             )
-            plot_errors(
+            plot_ause(
                 ratio_all,
-                err_mae_all,
-                err_var_mae_all,
-                "mae",
+                ause_mse_dict,
+                "mse",
                 "all",
                 self.model.output_path,
                 output="rgb",
@@ -1130,15 +1258,48 @@ def get_average_uncertainty_metrics(
         coverage_error_values = rgb_all_coverage_error_values / num_images
         abs_coverage_error_values = rgb_all_abs_coverage_error_values / num_images
         neg_coverage_error_values = rgb_all_neg_coverage_error_values / num_images
-        
+
+        auce_dict = {
+            'model_name': model_name,
+            'vc': False,
+            'alpha': alphas,
+            'coverage_values': coverage_values,
+            'avg_length_values': avg_length_values,
+            'coverage_error_values': coverage_error_values,
+            'abs_coverage_error_values': abs_coverage_error_values,
+            'neg_coverage_error_values': neg_coverage_error_values,
+        }
+
+        if 'vcurf' in ause_mse_dict.keys():
+            coverage_values_vc = rgb_all_coverage_values_vc / num_images
+            avg_length_values_vc = rgb_all_avg_length_values_vc / num_images
+            coverage_error_values_vc = rgb_all_coverage_error_values_vc / num_images
+            abs_coverage_error_values_vc = rgb_all_abs_coverage_error_values_vc / num_images
+            neg_coverage_error_values_vc = rgb_all_neg_coverage_error_values_vc / num_images
+
+            auce_dict['vc'] = True
+            auce_vc_dict = {
+                'coverage_values_vc': coverage_values_vc,
+                'avg_length_values_vc': avg_length_values,
+                'coverage_error_values_vc': coverage_error_values_vc,
+                'abs_coverage_error_values_vc': abs_coverage_error_values_vc,
+                'neg_coverage_error_values_vc': neg_coverage_error_values_vc,
+            }
+            auce_dict.update(auce_vc_dict)
+
         # TODO: Add plotting of auce curves (https://github.com/fregu856/evaluating_bdl/blob/master/depthCompletion/ensembling_eval_auce.py)
-        plot_auce_curves(coverage_values=coverage_values,
-                         avg_length_values=avg_length_values, 
-                         coverage_error_values=coverage_error_values, 
-                         abs_coverage_error_values=abs_coverage_error_values, 
-                         neg_coverage_error_values=neg_coverage_error_values,
-                         save_dir=self.model.output_path.parent / "plots",
-                         output="rgb")
+        # plot_auce_curves(coverage_values=coverage_values,
+        #                  avg_length_values=avg_length_values,
+        #                  coverage_error_values=coverage_error_values,
+        #                  abs_coverage_error_values=abs_coverage_error_values,
+        #                  neg_coverage_error_values=neg_coverage_error_values,
+        #                  save_dir=self.model.output_path.parent / "plots",
+        #                  output="rgb")
+
+        plot_auces(auce_dict=auce_dict,
+                   save_dir=self.model.output_path.parent / "plots",
+                                    output="rgb"
+                   )
                          
 
     # average the metrics list

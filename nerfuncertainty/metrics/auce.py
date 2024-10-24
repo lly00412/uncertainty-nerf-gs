@@ -139,3 +139,104 @@ def plot_auce_curves(coverage_values,
             abs_coverage_error_values)
     np.save("%s/auce_%s_empirical_coverage_negative_error.npy" % (save_dir, output), 
             neg_coverage_error_values)
+
+
+def plot_auces(auce_dict,
+                     save_dir="./imgs",
+                     output="rgb"):
+    alphas = list(np.arange(start=0.01, stop=1.0, step=0.01))  # ([0.01, 0.02, ..., 0.99], 99 elements)
+
+    plt.figure(1)
+    plt.plot([0.0, 1.0], [0.0, 1.0], "k:", label="Perfect")
+    # plt.plot(alphas, coverage_values)
+    plt.plot(alphas, np.flip(auce_dict['coverage_values'], 0),label=auce_dict['model_name'])
+    if auce_dict['vc']:
+        plt.plot(alphas, np.flip(auce_dict['coverage_values_vc'], 0), label='vcurf')
+    plt.legend()
+    plt.ylabel("Empirical coverage")
+    plt.xlabel("p")
+    plt.title("Prediction intervals - Empirical coverage")
+    plt.savefig("%s/%s_empirical_coverage.png" % (save_dir, output))
+    plt.close(1)
+
+    plt.figure(1)
+    # plt.plot(alphas, avg_length_values)
+    plt.plot(alphas, np.flip(auce_dict['avg_length_values'], 0),label=auce_dict['model_name'])
+    if auce_dict['vc']:
+        plt.plot(alphas, np.flip(auce_dict['avg_length_values_vc'], 0), label='vcurf')
+    # plt.legend()
+    plt.ylabel("Average interval length [m]")
+    plt.xlabel("p")
+    avg_length_ylim = plt.ylim()
+    plt.title("Prediction intervals - Average interval length")
+    plt.savefig("%s/%s_length.png" % (save_dir, output))
+    plt.close(1)
+
+    plt.figure(1)
+    plt.plot([0.0, 1.0], [0.0, 0.0], "k:", label="Perfect")
+    # plt.plot(alphas, coverage_error_values)
+    plt.plot(alphas, np.flip(auce_dict['coverage_error_values'], 0),label=auce_dict['model_name'])
+    if auce_dict['vc']:
+        plt.plot(alphas, np.flip(auce_dict['coverage_error_values_vc'], 0), label='vcurf')
+    plt.legend()
+    plt.ylabel("Empirical coverage error")
+    plt.xlabel("p")
+    coverage_error_ylim = plt.ylim()
+    plt.title("Prediction intervals - Empirical coverage error")
+    plt.savefig("%s/%s_empirical_coverage_error.png" % (save_dir, output))
+    plt.close(1)
+
+    plt.figure(1)
+    plt.plot([0.0, 1.0], [0.0, 0.0], "k:", label="Perfect")
+    # plt.plot(alphas, abs_coverage_error_values)
+    plt.plot(alphas, np.flip(auce_dict['abs_coverage_error_values'], 0),label=auce_dict['model_name'])
+    if auce_dict['vc']:
+        plt.plot(alphas, np.flip(auce_dict['abs_coverage_error_values_vc'], 0), label='vcurf')
+    plt.legend()
+    plt.ylabel("Empirical coverage absolute error")
+    plt.xlabel("p")
+    abs_coverage_error_ylim = plt.ylim()
+    plt.title("Prediction intervals - Empirical coverage absolute error")
+    plt.savefig("%s/%s_empirical_coverage_absolute_error.png" % (save_dir, output))
+    plt.close(1)
+
+    plt.figure(1)
+    plt.plot([0.0, 1.0], [0.0, 0.0], "k:", label="Perfect")
+    # plt.plot(alphas, neg_coverage_error_values)
+    plt.plot(alphas, np.flip(auce_dict['neg_coverage_error_values'], 0),label=auce_dict['model_name'])
+    if auce_dict['vc']:
+        plt.plot(alphas, np.flip(auce_dict['neg_coverage_error_values_vc'], 0), label='vcurf')
+    plt.legend()
+    plt.ylabel("Empirical coverage negative error")
+    plt.xlabel("p")
+    neg_coverage_error_ylim = plt.ylim()
+    plt.title("Prediction intervals - Empirical coverage negative error")
+    plt.savefig("%s/%s_empirical_coverage_negative_error.png" % (save_dir, output))
+    plt.close(1)
+
+    ## save values
+    np.save("%s/auce_%s_alphas.npy" % (save_dir, output),
+            alphas)
+    np.save("%s/auce_%s_empirical_coverage.npy" % (save_dir, output),
+            auce_dict['coverage_values'])
+    np.save("%s/auce_%s_avg_length.npy" % (save_dir, output),
+            auce_dict['avg_length_values'])
+    np.save("%s/auce_%s_empirical_coverage_error.npy" % (save_dir, output),
+            auce_dict['coverage_error_values'])
+    np.save("%s/auce_%s_empirical_coverage_absolute_error.npy" % (save_dir, output),
+            auce_dict['abs_coverage_error_values'])
+    np.save("%s/auce_%s_empirical_coverage_negative_error.npy" % (save_dir, output),
+            auce_dict['neg_coverage_error_values'])
+    if auce_dict['vc']:
+        np.save("%s/auce_%s_empirical_coverage_vc.npy" % (save_dir, output),
+                auce_dict['coverage_values_vc'])
+        np.save("%s/auce_%s_avg_length_vc.npy" % (save_dir, output),
+                auce_dict['avg_length_values_vc'])
+        np.save("%s/auce_%s_empirical_coverage_error_vc.npy" % (save_dir, output),
+                auce_dict['coverage_error_values_vc'])
+        np.save("%s/auce_%s_empirical_coverage_absolute_error_vc.npy" % (save_dir, output),
+                auce_dict['abs_coverage_error_values_vc'])
+        np.save("%s/auce_%s_empirical_coverage_negative_error_vc.npy" % (save_dir, output),
+                auce_dict['neg_coverage_error_values_vc'])
+
+

@@ -152,10 +152,11 @@ def vcurf_eval_setup(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # add methods applicable for ensemble
-    if config.method_name == "nerfacto":
-        config.pipeline._target = VCURFPipeline
-    elif config.method_name == "active-nerfacto":
-        config.pipeline._target = VCURFPipeline
+    # if config.method_name == "nerfacto":
+    #     config.pipeline._target = VCURFPipeline
+    # elif config.method_name == "active-nerfacto":
+    #     config.pipeline._target = VCURFPipeline
+    config.pipeline._target = VCURFPipeline
 
     pipeline = config.pipeline.setup(
         device=device,

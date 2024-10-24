@@ -80,7 +80,26 @@ class VCURFConfig(EvalUncertainty):
 
     sampling_radii_depth_ratio: Optional[float] = 0.1
 
-    sampling_method: Literal["rgb", "depth"] = "rgb"
+    sampling_method: Literal["rgb", "depth"] = "rgb",
+
+    # For mcdropout model
+
+    mc_samples: Optional[int] = 10
+
+    # For laplace model
+
+    prior_precision: float = 1.0
+    # Prior precision
+
+    n_samples: int = 100
+    # samples for the Laplace MC sapling
+
+    n_iters: int = 300
+    # number of iterations to compute the diagonal of the GGN matrix
+
+    use_deterministic_density: bool = False
+
+
 
 @dataclass
 class MCDropoutConfig(EvalUncertainty):

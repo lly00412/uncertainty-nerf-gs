@@ -34,3 +34,19 @@ ns-eval-unc ensemble-config \
         --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/  \
         --render-output-path ./output/m360/kitchen_v30/kitchen/ensembling/main/plots --save-rendered-images --unc-max 0.3 \
         --eval_depth False
+
+
+ns-eval-unc vcurf-config --load-config ./output/m360/kitchen_v30/kitchen/nerfacto/main/config.yml \
+            --sampling-method rgb    \
+            --output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/rgb_l2/metrics.json   \
+            --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/    \
+            --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/main/rgb_l2/plots \
+            --save-rendered-images --unc-max 0.3
+
+
+ns-eval-unc vcurf-config --load-config ./output/m360/kitchen_v30/kitchen/nerfacto-mcdropout/main/config.yml \
+            --sampling-method rgb    \
+            --output-path ./output/m360/kitchen_v30/kitchen/vcurf/nerfacto-mcdropout/main/rgb_l2/metrics.json   \
+            --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/    \
+            --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/nerfacto-mcdropout/main/rgb_l2/plots \
+            --save-rendered-images --unc-max 0.3
