@@ -3,6 +3,13 @@ CUDA_VISIBLE_DEVICES=1
 
 # Train nerfacto for VS-NeRF
 
+ns-train nerfacto --data /mnt/Data2/nerf_datasets/nerf_synthetic/ship/ \
+        --output-dir output/nerf_synthetic/ship_v80 --experiment-name ship \
+        --method-name nerfacto --timestamp main \
+        --pipeline.model.camera-optimizer.mode off \
+        --viewer.quit-on-train-completion True sparse-blender --num_images 80 \
+        --seed_random_split seed4
+
 ns-train nerfacto-mcdropout --data /mnt/Data2/nerf_datasets/nerf_synthetic/ship/ \
         --pipeline.model.density_dropout_layers False \
         --pipeline.model.dropout_rate 0.1 \

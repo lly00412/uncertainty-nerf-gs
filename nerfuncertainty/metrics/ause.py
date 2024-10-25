@@ -50,27 +50,30 @@ def auc(unc_vec, err_vec, vc_unc_vec=None, err_type="rmse"):
     # Sort the error by err
     opt_thres = [torch.quantile(err_vec, q) for q in quants]
     opt_subs = [err_vec <= t for t in opt_thres]
+    err_to_sort = err_vec.clone()
     if err_type == "rmse":
-        ause_err = torch.tensor([torch.sqrt(err_vec[s].mean()).item() if s.any() else 0.0 for s in opt_subs])
+        ause_err = torch.tensor([torch.sqrt(err_to_sort[s].mean()).item() if s.any() else 0.0 for s in opt_subs])
     elif err_type == "mae" or err_type == "mse":
-        ause_err = torch.tensor([err_vec[s].mean().item() if s.any() else 0.0 for s in opt_subs])
+        ause_err = torch.tensor([err_to_sort[s].mean().item() if s.any() else 0.0 for s in opt_subs])
 
     # Sort the error by var
     var_thres = [torch.quantile(unc_vec, q) for q in quants]
     var_subs = [unc_vec <= t for t in var_thres]
+    err_to_sort = err_vec.clone()
     if err_type == "rmse":
-        ause_err_by_var = torch.tensor([torch.sqrt(err_vec[s].mean()).item() if s.any() else 0.0 for s in var_subs])
+        ause_err_by_var = torch.tensor([torch.sqrt(err_to_sort[s].mean()).item() if s.any() else 0.0 for s in var_subs])
     elif err_type == "mae" or err_type == "mse":
-        ause_err_by_var = torch.tensor([err_vec[s].mean().item() if s.any() else 0.0 for s in var_subs])
+        ause_err_by_var = torch.tensor([err_to_sort[s].mean().item() if s.any() else 0.0 for s in var_subs])
 
     # Sort the error by vc var
     if vc_unc_vec is not None:
         vc_var_thres = [torch.quantile(vc_unc_vec, q) for q in quants]
         vc_var_subs = [vc_unc_vec <= t for t in vc_var_thres]
+        err_to_sort = err_vec.clone()
         if err_type == "rmse":
-            ause_err_by_vc_var = torch.tensor([torch.sqrt(err_vec[s]).mean().item() if s.any() else 0.0 for s in vc_var_subs])
+            ause_err_by_vc_var = torch.tensor([torch.sqrt(err_to_sort[s].mean()).item() if s.any() else 0.0 for s in vc_var_subs])
         elif err_type == "mae" or err_type == "mse":
-            ause_err_by_vc_var = torch.tensor([err_vec[s].mean().item() if s.any() else 0.0 for s in vc_var_subs])
+            ause_err_by_vc_var = torch.tensor([err_to_sort[s].mean().item() if s.any() else 0.0 for s in vc_var_subs])
 
     # Normalize and append
     if vc_unc_vec is None:
