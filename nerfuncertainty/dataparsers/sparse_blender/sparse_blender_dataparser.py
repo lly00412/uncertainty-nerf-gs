@@ -75,7 +75,7 @@ class SparseBlenderDataParserConfig(DataParserConfig):
     """alpha color of background"""
     num_images: int = 5
     """How much data to use"""
-    seed_random_split: Literal['seed1', 'seed2', 'seed3'] = 'seed1'
+    seed_random_split: Literal['seed1', 'seed2', 'seed3', 'seed4'] = 'seed1'
     """Which random split to use"""
 
 
@@ -106,7 +106,10 @@ class SparseBlender(DataParser):
         meta = load_from_json(self.data / f"transforms_{split}.json")
         image_filenames = []
         poses = []
-        train_split = selected_images[self.config.seed_random_split][:self.num_images]
+        if self.config.seed_random_split == 'seed4':
+            train_split = np.random.choice(np.arange(100), size=self.num_images, replace=False)
+        else:
+            train_split = selected_images[self.config.seed_random_split][:self.num_images]
         for frame in meta["frames"]:
             pose = np.array(frame["transform_matrix"])
             if split == "train":

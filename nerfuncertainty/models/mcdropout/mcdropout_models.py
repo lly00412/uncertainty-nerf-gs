@@ -37,7 +37,7 @@ class NerfactoMCDropoutModelConfig(NerfactoModelConfig):
     Layers to apply dropout to. -1 means the last layer. 
     """
 
-    density_dropout_layers: bool = True
+    density_dropout_layers: bool = False
     """
     Layers to apply the dropout for the density base_mlp.
     """

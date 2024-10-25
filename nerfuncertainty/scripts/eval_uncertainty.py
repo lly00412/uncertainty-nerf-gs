@@ -384,7 +384,7 @@ def get_unc_metrics_rgb(
     ratio, err_mse, err_var_mse, err_vc_var_mse, \
         auc_mse_by_opt, auc_mse_by_var, auc_mse_by_vc_var = auc(
         unc_vec=rgb_var_flat,
-        err_vec=absolute_error_flat,
+        err_vec=squared_error_flat,
         vc_unc_vec=rgb_vc_var_flat if 'rgb_vc_std' in outputs.keys() else None,
         err_type="mse"
     )
@@ -403,7 +403,7 @@ def get_unc_metrics_rgb(
     ratio, err_rmse, err_var_rmse, err_vc_var_rmse, \
         auc_rmse_by_opt, auc_rmse_by_var, auc_rmse_by_vc_var = auc(
         unc_vec=rgb_var_flat,
-        err_vec=absolute_error_flat,
+        err_vec=squared_error_flat,
         vc_unc_vec=rgb_vc_var_flat if 'rgb_vc_std' in outputs.keys() else None,
         err_type="rmse"
     )
@@ -445,6 +445,7 @@ def get_unc_metrics_rgb(
 
     # TODO: modify outputs as vc results + baseline
     dict_output = {
+        "ratio": ratio,
         "nll_rgb": nll_rgb,
         "ause_mse_by_opt": auc_mse_by_opt,
         "ause_rmse_by_opt": auc_rmse_by_opt,
@@ -706,6 +707,7 @@ def get_unc_metrics_depth(
     # absolute_error_img = torch.clip(absolute_error, min=0.0, max=1.0)
 
     dict_output = {
+        "ratio": ratio,
         "nll_depth": nll_depth,
         "ause_mse": ause_mse,
         "ause_rmse": ause_rmse,
@@ -994,15 +996,15 @@ def get_average_uncertainty_metrics(
         depth_err_var_mse_all = np.zeros(100)
         depth_err_var_rmse_all = np.zeros(100)
 
-        rgb_err_mae_all = np.zeros(101)
-        rgb_err_mse_all = np.zeros(101)
-        rgb_err_rmse_all = np.zeros(101)
-        rgb_err_var_mae_all = np.zeros(101)
-        rgb_err_var_mse_all = np.zeros(101)
-        rgb_err_var_rmse_all = np.zeros(101)
-        rgb_err_vc_var_mae_all = np.zeros(101)
-        rgb_err_vc_var_mse_all = np.zeros(101)
-        rgb_err_vc_var_rmse_all = np.zeros(101)
+        rgb_err_mae_all = np.zeros(100)
+        rgb_err_mse_all = np.zeros(100)
+        rgb_err_rmse_all = np.zeros(100)
+        rgb_err_var_mae_all = np.zeros(100)
+        rgb_err_var_mse_all = np.zeros(100)
+        rgb_err_var_rmse_all = np.zeros(100)
+        rgb_err_vc_var_mae_all = np.zeros(100)
+        rgb_err_vc_var_mse_all = np.zeros(100)
+        rgb_err_vc_var_rmse_all = np.zeros(100)
 
         
         # for plotting auce values
@@ -1166,7 +1168,8 @@ def get_average_uncertainty_metrics(
                          output="depth")
         
     if eval_rgb_unc:
-        ratio_all = np.linspace(0, 1, 100+1, endpoint=True)
+        # ratio_all = np.linspace(0, 1, 100+1, endpoint=True)
+        ratio_all = [1. / 100 * t for t in range(1, 100 + 1)]
         err_mae_all = rgb_err_mae_all / num_images
         err_mse_all = rgb_err_mse_all / num_images
         err_rmse_all = rgb_err_rmse_all / num_images
