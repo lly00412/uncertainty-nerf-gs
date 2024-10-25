@@ -22,8 +22,6 @@ from nerfstudio.data.utils.dataparsers_utils import (
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE
 
-MAX_AUTO_RESOLUTION = 1600
-
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig, Nerfstudio
 
 @dataclass
@@ -205,6 +203,7 @@ class SparseMipNerf360v2(Nerfstudio):
             orientation_method = self.config.orientation_method
 
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
+        origin_poses = poses.clone()
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
             method=orientation_method,
@@ -216,7 +215,6 @@ class SparseMipNerf360v2(Nerfstudio):
         if self.config.auto_scale_poses:
             scale_factor /= float(torch.max(torch.abs(poses[:, :3, 3])))
         scale_factor *= self.config.scale_factor
-
         poses[:, :3, 3] *= scale_factor
 
         # Choose image_filenames and poses based on split, but after auto orient and scaling the poses.
@@ -268,6 +266,18 @@ class SparseMipNerf360v2(Nerfstudio):
         metadata = {}
         if (camera_type in [CameraType.FISHEYE, CameraType.FISHEYE624]) and (fisheye_crop_radius is not None):
             metadata["fisheye_crop_radius"] = fisheye_crop_radius
+
+        # metadata['transform'] = transform_matrix.unsqueeze(0).repeat(poses.shape[0],1,1)
+        scale_factor_tensor = torch.tensor([scale_factor]).unsqueeze(0).unsqueeze(0).repeat(origin_poses.shape[0],1,4)
+        transform_matrix_tensor = transform_matrix.unsqueeze(0).repeat(origin_poses.shape[0],1,1)
+        metadata_tensor = torch.cat([origin_poses,scale_factor_tensor,transform_matrix_tensor],dim=1)
+        # build with [origin_poses[:,4,4], scale_factor[:,1,4], transform_matrix[:3,4]]
+
+        # metadata['scale_factor'] = scale_factor
+        # metadata['transform'] = transform_matrix.tolist()
+        # transform_matrix
+        # breakpoint()
+        metadata = {'poses_scale_transform_tensor': metadata_tensor}
 
         cameras = Cameras(
             fx=fx,
@@ -385,6 +395,7 @@ class SparseMipNerf360v2(Nerfstudio):
                 "depth_filenames": depth_filenames if len(depth_filenames) > 0 else None,
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "mask_color": self.config.mask_color,
+                "origin_poses": origin_poses,
                 **metadata,
             },
         )

@@ -260,13 +260,16 @@ def save_imgs_rgb(
 
     # im = ax.imshow(vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
     # import mediapy as media
-    # fname = Path("output/vir2rd_rgb_0.png")
+    # fname = Path("output/m360/debug/vir2rd_rgb_0.png")
     # media.write_image(fname, vir2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/vir_rgb_0.png")
+    # fname = Path("output/m360/debug/rd2rd_rgb_0.png")
+    # media.write_image(fname, rd2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
+
+    # fname = Path("output/m360/debug/vir_rgb_0.png")
     # media.write_image(fname, vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/rgb_0.png")
+    # fname = Path("output/m360/debug/rgb_0.png")
     # media.write_image(fname, outputs['rgb'].cpu().numpy())
 
     # fname = Path("output/depth_0.png")

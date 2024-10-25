@@ -78,7 +78,7 @@ class VCURFConfig(EvalUncertainty):
 
     num_vcams: Optional[int] = 6
 
-    sampling_radii_depth_ratio: Optional[float] = 0.1
+    sampling_radii_depth_ratio: Optional[float] = 0.01
 
     sampling_method: Literal["rgb", "depth"] = "rgb",
 
