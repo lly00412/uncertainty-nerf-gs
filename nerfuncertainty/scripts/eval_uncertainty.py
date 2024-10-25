@@ -160,6 +160,18 @@ def save_imgs_depth(
 
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
     # im.save(output_path / Path(str(img_num) + "_depth.png"))
+    #
+    # depth_img = vir2rd_depths[0].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/vir2rd_depth_0.png")
+    #
+    # depth_img = rd_depth.squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/depth.png")
+    # from PIL import Image
+    # depth_img = vir_depths[0].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/vir_depth_0.png")
     
     # im = Image.fromarray(np.uint8(inferno(absolute_error_img.cpu().numpy()) * 255))
     # im.save(output_path / Path(str(img_num) + "_depth_error.png"))
@@ -245,7 +257,24 @@ def save_imgs_rgb(
     fname = output_path /  Path(f"{img_num}_rgb_gt.png") 
     # fig.savefig(fname, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
-    
+
+    # im = ax.imshow(vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
+    # import mediapy as media
+    # fname = Path("output/vir2rd_rgb_0.png")
+    # media.write_image(fname, vir2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
+
+    # fname = Path("output/vir_rgb_0.png")
+    # media.write_image(fname, vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
+
+    # fname = Path("output/rgb_0.png")
+    # media.write_image(fname, outputs['rgb'].cpu().numpy())
+
+    # fname = Path("output/depth_0.png")
+    # media.write_image(fname, outputs['depth'].squeeze().cpu().numpy())
+
+
+
+
     # save_img(rgb_gt_img, fname)
     media.write_image(fname, rgb_gt_img.cpu().numpy())
 

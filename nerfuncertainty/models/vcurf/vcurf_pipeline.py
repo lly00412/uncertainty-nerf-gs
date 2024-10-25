@@ -82,15 +82,14 @@ class VCURFPipeline(VanillaPipeline):
         outputs = self.model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box)
 
         GetVCams = VirtualCameras(camera_ray_bundle)
-        look_at, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
-        D_median = outputs['depth'].clone().flatten().median(0).values
-        radiaus = self.sampling_radii_depth_ratio * D_median
+        look_at, center_depth, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        # D_median = outputs['depth'].clone().flatten().median(0).values
+        radiaus = self.sampling_radii_depth_ratio * center_depth
         Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at, radiaus=radiaus)
 
         rd_depth = outputs['depth'].clone().permute(2,0,1)
         rd_depths = rd_depth.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
         pred_img = outputs['rgb'].clone().permute(2,0,1)
-        rd_pred_imgs = pred_img.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
 
         vir_depths = []
         vir_pred_imgs = []
@@ -100,7 +99,7 @@ class VCURFPipeline(VanillaPipeline):
         K = torch.eye(4).to(K_)
         K[:3,:3] = K_
 
-        backwarp = BackwardWarping(out_hw=(camera_ray_bundle.image_height, camera_ray_bundle.image_width),
+        backwarp = BackwardWarping(out_hw=(camera_ray_bundle.height.item(), camera_ray_bundle.width.item()),
                                    device=outputs['depth'].device, K=K)
 
         for vir_camera_ray_bundle in Vcams:
@@ -114,13 +113,16 @@ class VCURFPipeline(VanillaPipeline):
             vir_depths.append(vir_depth.unsqueeze(0))
             vir_pred_imgs.append(vir_pred_img)
         vir_depths = torch.stack(vir_depths)
+        vir_pred_imgs = torch.stack(vir_pred_imgs)
         rd2virs = torch.stack(rd2virs)
-        vir2rd_pred_imgs, vir2rd_depths, nv_mask = backwarp(img_src=rd_pred_imgs, depth_src=vir_depths,
+        vir2rd_pred_imgs, vir2rd_depths, nv_mask = backwarp(img_src=vir_pred_imgs, depth_src=vir_depths,
                                                             depth_tgt=rd_depths,
                                                             tgt2src_transform=rd2virs)
         ################################
         #  compute uncertainty by l2 diff
         ################################
+
+        breakpoint()
         # depth uncertainty
         vir2rd_depth_sum = vir2rd_depths.sum(0)
         numels = float(self.num_vcams) - nv_mask.sum(0)
@@ -177,8 +179,12 @@ class VirtualCameras:
         self.sampling_center = self.get_camera_center(self.center_camera)
         self.data_device = self.sampling_center.device
     def get_camera_center(self,camera: Cameras):
-        c2w = camera.camera_to_worlds # (1,3,4)
-        camera_o = c2w[0,:3,3].clone()
+        c2w = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
+        # R = c2w[:3, :3]
+        # T = c2w[:3, 3]
+        # camera_o = -R.T @ T
+        camera_o = c2w[:3,3]
+
         return camera_o
     def random_points_on_sphere(self, N, r, O):
         """
@@ -194,29 +200,32 @@ class VirtualCameras:
         """
         points = torch.rand(N,3).to(O)
         points = 2*points-torch.ones_like(points)
-        points = points / torch.norm(points, dim=1, keepdim=True)
-        points = points * r
-        points = points + O
+        points /=  torch.norm(points, dim=1, keepdim=True)
+        points = points * r + O
+
         return points
 
     def get_N_near_cam_by_look_at(self, N, look_at, radiaus=0.1):
         # sample new camera center
         new_centers = self.random_points_on_sphere(N,radiaus, self.sampling_center)
         Vcams = []
+        look_at = look_at.to(self.sampling_center.device)
         for new_o in new_centers:
             # create new camera pose by look at
-            forward = look_at - new_o
-            forward /= torch.linalg.norm(forward)
-            forward = forward.to(new_o)
-            world_up = torch.tensor([0, 1, 0]).to(new_o)  # need to be careful for the openGL system!!!
-            right = torch.cross(world_up, forward)
-            right /= torch.linalg.norm(right)
-            up = torch.cross(forward, right)
+            # forward = F.normalize(look_at - new_o, dim=0)
+            # world_up = torch.tensor([0, 0, 1]).to(new_o)  # nerfstudio is z-up!!!
+            # right = F.normalize(torch.cross(world_up, forward), dim=0)
+            # up = torch.cross(forward, right)
+            # new_R = torch.stack([right, up, forward], dim=1)
+            # new_T = -new_R @ new_o
 
-            new_c2w = torch.eye(4).to(new_o)
-            new_c2w[:3, :3] = torch.vstack([right, up, forward]).T
-            new_c2w[:3, 3] = new_o
-            new_c2w = new_c2w[:3,:]
+            # new_c2w = torch.eye(4).to(new_o)
+            # new_c2w[:3, :3] = new_R
+            # new_c2w[:3, 3] = new_T
+            # new_c2w = new_c2w[:3,:]
+
+            new_c2w = self.center_camera.camera_to_worlds.squeeze().clone()
+            new_c2w[:3,3] = new_o
 
             new_camera = copy.deepcopy(self.center_camera)
             new_camera.camera_to_worlds = new_c2w.unsqueeze(0)
@@ -368,6 +377,8 @@ class BackwardWarping(nn.Module):
         src_grid = self.projection(pts3d_src,self.K,normalized=True)
         transformed_distance = pts3d_src[:, 2:3].view(b,1,h,w)
 
+        breakpoint()
+
         img_tgt = F.grid_sample(img_src, src_grid, mode = 'bilinear', padding_mode = 'zeros')
         depth_src2tgt = F.grid_sample(depth_src, src_grid, mode='bilinear', padding_mode='zeros')
 
@@ -400,9 +411,17 @@ def extract_scene_center_and_c2w(depth, camera):
 
     point3d_world = C2W.cpu() @ point3d_camera.view(4, -1)
     point3d_world = point3d_world.view(4, point3d_camera.shape[1], point3d_camera.shape[2])
-    expanded_mask = mask.expand_as(point3d_world)
-    selected = point3d_world.to(mask.device)[expanded_mask]
-    selected = selected.view(4, -1)
-    scene_center = selected.median(1).values[:3]
+    # if we assume the object is in the photo center
 
-    return scene_center, C2W
+    h, w = point3d_world.shape[1], point3d_world.shape[2]
+    center_patch =  point3d_world[:, int(h//2)-8: int(h//2)+8, int(w//2)-8: int(w//2)+8]
+    center_depth_path = depth.squeeze()[int(h//2)-8: int(h//2)+8, int(w//2)-8: int(w//2)+8]
+    #
+    # expanded_mask = mask.expand_as(point3d_world)
+    # selected = point3d_world.to(mask.device)[expanded_mask]
+    # selected = selected.view(4, -1)
+    # scene_center = selected.median(1).values[:3]
+    scene_center = center_patch.reshape(4,-1).mean(-1)[:3]
+    center_depth = center_depth_path.flatten().mean()
+
+    return scene_center, center_depth, C2W

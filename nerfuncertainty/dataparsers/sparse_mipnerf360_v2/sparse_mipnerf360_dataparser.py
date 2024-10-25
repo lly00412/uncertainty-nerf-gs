@@ -59,6 +59,8 @@ class SparseMipNerf360v2(Nerfstudio):
         depth_filenames = []
         poses = []
 
+        # TODO: replace the data loader by fisherRF loader, the c2w matrix by colmap ore incorrect!!!!
+
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
         cx_fixed = "cx" in meta
