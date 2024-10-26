@@ -34,6 +34,7 @@ class SparseMipNerf360DataParserConfigv2(NerfstudioDataParserConfig):
     """How many images use in training"""
     seed_random_split: int = 2024 #Literal['seed1', 'seed2', 'seed3'] = 'seed1'
     """Which random split to use"""
+    keep_origin_poses: bool = False
 
 @dataclass
 class SparseMipNerf360v2(Nerfstudio):
@@ -194,8 +195,6 @@ class SparseMipNerf360v2(Nerfstudio):
             else:
                 raise ValueError(f"Unknown dataparser split {split}")
 
-
-
         if "orientation_override" in meta:
             orientation_method = meta["orientation_override"]
             CONSOLE.log(f"[yellow] Dataset is overriding orientation method to {orientation_method}")
@@ -268,16 +267,16 @@ class SparseMipNerf360v2(Nerfstudio):
             metadata["fisheye_crop_radius"] = fisheye_crop_radius
 
         # metadata['transform'] = transform_matrix.unsqueeze(0).repeat(poses.shape[0],1,1)
-        scale_factor_tensor = torch.tensor([scale_factor]).unsqueeze(0).unsqueeze(0).repeat(origin_poses.shape[0],1,4)
-        transform_matrix_tensor = transform_matrix.unsqueeze(0).repeat(origin_poses.shape[0],1,1)
-        metadata_tensor = torch.cat([origin_poses,scale_factor_tensor,transform_matrix_tensor],dim=1)
+        # scale_factor_tensor = torch.tensor([scale_factor]).unsqueeze(0).unsqueeze(0).repeat(origin_poses.shape[0],1,4)
+        # transform_matrix_tensor = transform_matrix.unsqueeze(0).repeat(origin_poses.shape[0],1,1)
+        # metadata_tensor = torch.cat([origin_poses,scale_factor_tensor,transform_matrix_tensor],dim=1)
         # build with [origin_poses[:,4,4], scale_factor[:,1,4], transform_matrix[:3,4]]
 
-        # metadata['scale_factor'] = scale_factor
-        # metadata['transform'] = transform_matrix.tolist()
+        metadata['scale_factor'] = scale_factor
+        metadata['transform'] = transform_matrix.tolist()
         # transform_matrix
         # breakpoint()
-        metadata = {'poses_scale_transform_tensor': metadata_tensor}
+        # metadata = {'poses_scale_transform_tensor': metadata_tensor}
 
         cameras = Cameras(
             fx=fx,
@@ -287,7 +286,7 @@ class SparseMipNerf360v2(Nerfstudio):
             distortion_params=distortion_params,
             height=height,
             width=width,
-            camera_to_worlds=poses[:, :3, :4],
+            camera_to_worlds=origin_poses[:,:3, :4] if self.config.keep_origin_poses else poses[:, :3, :4],
             camera_type=camera_type,
             metadata=metadata,
         )

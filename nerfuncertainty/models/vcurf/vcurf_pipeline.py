@@ -36,7 +36,9 @@ class VCURFPipeline(VanillaPipeline):
         sampling_radii_depth_ratio: float = 0.1,
         sampling_method: Literal["rgb", "depth"] = "rgb",
         grad_scaler: Optional[GradScaler] = None,
+        keep_origin_poses: bool = True,
     ):
+        config.datamanager.dataparser.keep_origin_poses = keep_origin_poses
         super().__init__(
             config=config,
             device=device,
@@ -189,6 +191,7 @@ class VirtualCameras:
         self.data_device = self.sampling_center.device
     def get_camera_center(self,camera: Cameras):
         c2w = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
+
         breakpoint()
         # poses = transform @ origin_poses
         # poses[:, :3, 3] *= scale_factor
