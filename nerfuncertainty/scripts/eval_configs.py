@@ -82,7 +82,7 @@ class VCURFConfig(EvalUncertainty):
 
     sampling_method: Literal["rgb", "depth"] = "rgb",
 
-    keep_origin_poses: Optional[bool] = True,
+    # keep_origin_poses: Optional[bool] = True,
 
     # For mcdropout model
 

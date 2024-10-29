@@ -10,8 +10,8 @@ CUDA_VISIBLE_DEVICES=1
 #            --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/active-nerfacto/main/rgb_l2/plots \
 #            --save-rendered-images --unc-max 0.3
 ns-eval-unc vcurf-config --load-config ./output/m360/kitchen_v30/kitchen/active-nerfacto/main/config.yml \
-        --keep-origin-poses True \
         --sampling-method depth \
+        --sampling-radii-depth-ratio 0.005 \
         --output-path ./output/m360/kitchen_v30/kitchen/vcurf/active-nerfacto/main/depth_l2/metrics.json \
         --dataset-path  /mnt/Data2/nerf_datasets/m360/kitchen/  \
         --render-output-path ./output/m360/kitchen_v30/kitchen/vcurf/active-nerfacto/main/depth_l2/plots --save-rendered-images --unc-max 0.3

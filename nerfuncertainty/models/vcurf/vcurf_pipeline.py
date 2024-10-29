@@ -33,12 +33,12 @@ class VCURFPipeline(VanillaPipeline):
         world_size: int = 1,
         local_rank: int = 0,
         num_vcams: int = 6,
-        sampling_radii_depth_ratio: float = 0.1,
+        sampling_radii_depth_ratio: float = 0.05,
         sampling_method: Literal["rgb", "depth"] = "rgb",
         grad_scaler: Optional[GradScaler] = None,
-        keep_origin_poses: bool = True,
+        # keep_origin_poses: bool = True,
     ):
-        config.datamanager.dataparser.keep_origin_poses = keep_origin_poses
+        # config.datamanager.dataparser.keep_origin_poses = keep_origin_poses
         super().__init__(
             config=config,
             device=device,
@@ -84,12 +84,18 @@ class VCURFPipeline(VanillaPipeline):
         outputs = self.model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box)
 
         GetVCams = VirtualCameras(camera_ray_bundle)
-        look_at, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
-        D_median = outputs['depth'].clone().flatten().median(0).values
-        radiaus = self.sampling_radii_depth_ratio * D_median
+        # look_at, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        # D_median = outputs['depth'].clone().flatten().median(0).values
+
+        look_at, D_center, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        # D_median = outputs['depth'].clone().flatten().median(0).values
+
+        # radiaus = self.sampling_radii_depth_ratio * D_median
+        radiaus = self.sampling_radii_depth_ratio * D_center
         Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at, radiaus=radiaus)
 
         rd_depth = outputs['depth'].clone().permute(2,0,1)
+
         rd_depths = rd_depth.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
         pred_img = outputs['rgb'].clone().permute(2,0,1)
         pred_imgs = pred_img.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
@@ -103,16 +109,23 @@ class VCURFPipeline(VanillaPipeline):
         K = torch.eye(4).to(K_)
         K[:3,:3] = K_
 
+        transform_ = torch.tensor(camera_ray_bundle.metadata['transform']).to(rd_c2w.device)
+        transform = torch.eye(4).to(transform_)
+        transform[:3, :] = transform_
+
         backwarp = BackwardWarping(out_hw=(camera_ray_bundle.height.item(), camera_ray_bundle.width.item()),
                                    device=outputs['depth'].device, K=K)
 
         for vir_camera_ray_bundle in Vcams:
             vir_render_pkg = self.model.get_outputs_for_camera(vir_camera_ray_bundle, obb_box=obb_box)
             vir_depth = vir_render_pkg['depth'].squeeze()
+
             vir_pred_img = vir_render_pkg['rgb'].permute(2,0,1)
             vir_c2w = torch.eye(4).to(rd_c2w)
             vir_c2w[:3,:] = vir_camera_ray_bundle.camera_to_worlds.squeeze()
+            # vir_c2w = torch.inverse(transform) @ vir_c2w
             rd2vir = torch.inverse(vir_c2w) @ rd_c2w
+
             rd2rd = torch.inverse(rd_c2w) @ rd_c2w
             rd2virs.append(rd2vir)
             rd2rds.append(rd2rd)
@@ -189,17 +202,23 @@ class VirtualCameras:
         self.center_camera: Cameras = Center_Camera
         self.sampling_center,self.transform = self.get_camera_center(self.center_camera)
         self.data_device = self.sampling_center.device
-    def get_camera_center(self,camera: Cameras):
-        c2w = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
 
-        breakpoint()
-        # poses = transform @ origin_poses
-        # poses[:, :3, 3] *= scale_factor
-        c2w[:3,3] /= camera.metadata['scale_factor']
-        transform = torch.tensor(camera.metadata['transform']).to(c2w.device)
-        origin_c2w = torch.inverse(transform) @ c2w
-        camera_o = origin_c2w[:3,3]
-        return camera_o,transform,camera.metadata['scale_factor']
+    def get_camera_center(self,camera: Cameras):
+        c2w_ = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
+        # c2w_nerf = torch.eye(4).to(c2w_.device)
+        # c2w_nerf[:3,:] = c2w_
+        transform = torch.tensor(camera.metadata['transform']).to(c2w_.device)
+        self.scale_factor = camera.metadata['scale_factor']
+        self.transform = torch.eye(4).to(transform.device)
+        self.transform[:3,:] = transform
+        origin_c2w = get_origin_pose(c2w_, transform, self.scale_factor)
+        # origin_c2w = torch.inverse(self.transform) @ c2w_nerf
+        R = origin_c2w[:3, :3]
+        T = origin_c2w[:3, 3]
+        camera_o = -R.T @ T
+        # camera_o = origin_c2w[:3,3]
+        return camera_o,self.transform
+
     def random_points_on_sphere(self, N, r, O):
         """
         Generate N random points on a sphere of radius r centered at O.
@@ -212,7 +231,7 @@ class VirtualCameras:
         Returns:
         - points: a tensor of shape (N, 3) representing the N random points on the sphere
         """
-        points = torch.rand(N,3).to(O)
+        points = torch.randn(N,3).to(O)
         points = 2*points-torch.ones_like(points)
         points = points / torch.norm(points, dim=1, keepdim=True)
         points = points * r + O
@@ -229,14 +248,19 @@ class VirtualCameras:
             forward = look_at - new_o
             forward /= torch.linalg.norm(forward)
             forward = forward.to(new_o)
-            world_up = torch.tensor([0, 1, 0]).to(new_o)  # need to be careful for the openGL system!!!
+            world_up = torch.tensor([0, 0, 1]).to(new_o)  # need to be careful for the openGL system!!!
             right = torch.cross(world_up, forward)
             right /= torch.linalg.norm(right)
             up = torch.cross(forward, right)
+            new_R = torch.vstack([right, up, forward]).T
+            new_T = -new_R @ new_o
 
             new_c2w = torch.eye(4).to(new_o)
-            new_c2w[:3, :3] = torch.vstack([right, up, forward]).T
-            new_c2w[:3, 3] = new_o
+            new_c2w[:3, :3] = new_R
+            new_c2w[:3, 3] = new_T
+
+            new_c2w = self.transform @ new_c2w
+            new_c2w[:3, 3] *= self.scale_factor
 
             # new_c2w = self.center_camera.camera_to_worlds.squeeze().clone()
             # new_c2w[:3,3] = new_o
@@ -246,7 +270,6 @@ class VirtualCameras:
             Vcams.append(new_camera)
 
         return Vcams
-
 
 class Projection(nn.Module):
     """Layer which projects 3D points into a camera view
@@ -418,15 +441,39 @@ def extract_scene_center_and_c2w(depth, camera):
     mask = (depth_v > 0.).squeeze(0)
     point3d_camera = backproj_func(depth_v.cpu(), inv_K.cpu(), img_like_out=True).squeeze(0)
     # C2W = torch.tensor(getView2World(view.R, view.T))
-    C2W_ = camera.camera_to_worlds[0].clone().squeeze(0) # (3,4)
-    C2W = torch.eye(4).to(C2W_)
+    oriented_c2w = camera.camera_to_worlds[0].clone().squeeze(0) # (3,4)
+    transform = camera.metadata['transform']
+    scale_factor = camera.metadata['scale_factor']
+    origin_c2w = get_origin_pose(oriented_c2w,transform, scale_factor)
 
-    point3d_world = C2W.cpu() @ point3d_camera.view(4, -1)
+    point3d_world = origin_c2w.cpu() @ point3d_camera.view(4, -1)
     point3d_world = point3d_world.view(4, point3d_camera.shape[1], point3d_camera.shape[2])
-    # if we assume the object is in the photo center
-    expanded_mask = mask.expand_as(point3d_world)
-    selected = point3d_world.to(mask.device)[expanded_mask]
-    selected = selected.view(4, -1)
-    scene_center = selected.median(1).values[:3]
 
-    return scene_center, C2W
+    # expanded_mask = mask.expand_as(point3d_world)
+    # selected = point3d_world.to(mask.device)[expanded_mask]
+    # selected = selected.view(4, -1)
+    # scene_center = selected.median(1).values[:3]
+    # return scene_center, C2W_origin
+    # return scene_center, C2W_nerf
+
+    # if we assume the object is in the photo center
+    h, w = point3d_world.shape[1], point3d_world.shape[2]
+    center_patch = point3d_world[:, int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
+    center_depth_path = depth.squeeze()[int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
+
+    scene_center = center_patch.reshape(4, -1).mean(-1)[:3]
+    center_depth = center_depth_path.flatten().mean()
+
+    return scene_center, center_depth, origin_c2w
+
+def get_origin_pose(oriented_pose, transform, scale):
+    C2W = torch.eye(4).to(oriented_pose.device)
+    C2W[:3, :] = oriented_pose
+    C2W[:3, 3] /= scale
+
+    transform_matrix = torch.eye(4).to(oriented_pose.device)
+    transform_matrix[:3, :] = torch.tensor(transform).to(C2W.device)
+
+    origin_pose = torch.inverse(transform_matrix) @ C2W
+
+    return origin_pose

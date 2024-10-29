@@ -34,7 +34,7 @@ class SparseMipNerf360DataParserConfigv2(NerfstudioDataParserConfig):
     """How many images use in training"""
     seed_random_split: int = 2024 #Literal['seed1', 'seed2', 'seed3'] = 'seed1'
     """Which random split to use"""
-    keep_origin_poses: bool = False
+    # keep_origin_poses: bool = False
 
 @dataclass
 class SparseMipNerf360v2(Nerfstudio):
@@ -286,7 +286,7 @@ class SparseMipNerf360v2(Nerfstudio):
             distortion_params=distortion_params,
             height=height,
             width=width,
-            camera_to_worlds=origin_poses[:,:3, :4] if self.config.keep_origin_poses else poses[:, :3, :4],
+            camera_to_worlds=poses[:, :3, :4],
             camera_type=camera_type,
             metadata=metadata,
         )

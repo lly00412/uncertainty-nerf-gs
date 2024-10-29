@@ -158,6 +158,7 @@ def save_imgs_depth(
     # im = Image.fromarray((depth_gt_img.cpu().numpy() * 255).astype("uint8"))
     # im.save(output_path / Path(str(img_num) + "_depth_gt.png"))
 
+    # from PIL import Image
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
     # im.save(output_path / Path(str(img_num) + "_depth.png"))
     #
@@ -260,20 +261,51 @@ def save_imgs_rgb(
 
     # im = ax.imshow(vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
     # import mediapy as media
-    # fname = Path("output/m360/debug/vir2rd_rgb_0.png")
-    # media.write_image(fname, vir2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
+    # fname = Path("output/m360/debug/vir2rd_rgb_5.png")
+    # media.write_image(fname, vir2rd_pred_imgs[5].permute(1,2,0).cpu().numpy())
 
     # fname = Path("output/m360/debug/rd2rd_rgb_0.png")
     # media.write_image(fname, rd2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/m360/debug/vir_rgb_0.png")
-    # media.write_image(fname, vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
+    # fname = Path("output/m360/debug/vir_rgb_5.png")
+    # media.write_image(fname, vir_pred_imgs[5].permute(1,2,0).cpu().numpy())
 
     # fname = Path("output/m360/debug/rgb_0.png")
     # media.write_image(fname, outputs['rgb'].cpu().numpy())
 
     # fname = Path("output/depth_0.png")
     # media.write_image(fname, outputs['depth'].squeeze().cpu().numpy())
+
+    # from PIL import Image
+    #
+    # depth_img = vir2rd_depths[0].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/vir2rd_expected_depth_0.png")
+    #
+    # depth_img = rd_depth.squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/depth_0.png")
+
+    # depth_img = outputs['expected_depth'].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/expected_depth.png")
+
+    # depth_img = outputs['accumulation'].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/accumulation.png")
+
+    # depth_img = outputs['prop_depth_0'].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/prop_depth0.png")
+
+    # depth_img = outputs['prop_depth_1'].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/prop_depth1.png")
+
+
+    # depth_img = vir_depths[0].squeeze()
+    # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
+    # im.save("output/m360/debug/vir_expected_depth_0.png")
 
 
 
