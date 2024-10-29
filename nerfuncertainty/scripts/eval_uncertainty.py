@@ -261,8 +261,8 @@ def save_imgs_rgb(
 
     # im = ax.imshow(vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
     # import mediapy as media
-    # fname = Path("output/m360/debug/garden/vir2rd_rgb_5.png")
-    # media.write_image(fname, vir2rd_pred_imgs[5].permute(1,2,0).cpu().numpy())
+    # fname = Path("output/m360/debug/garden/vir2rd_rgb_0.png")
+    # media.write_image(fname, vir2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
 
     # fname = Path("output/m360/debug/garden/rd2rd_rgb_0.png")
     # media.write_image(fname, rd2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
@@ -272,6 +272,8 @@ def save_imgs_rgb(
 
     # fname = Path("output/m360/debug/garden/rgb_0.png")
     # media.write_image(fname, outputs['rgb'].cpu().numpy())
+
+    #fname = Path("output/m360/debug/garden/rgb_vs_std_0.png")
 
     # fname = Path("output/depth_0.png")
     # media.write_image(fname, outputs['depth'].squeeze().cpu().numpy())
@@ -363,7 +365,12 @@ def save_imgs_rgb(
         # im = ax.imshow(rgb_std.cpu().numpy(), cmap="inferno")
         # im = ax.imshow(rgb_std.cpu().numpy(), cmap="Greys")
         # clip and normalize uncertainty values
+        unc_max = 3.
+        unc_min = 0.
+        rgb_vc_std = rgb_std
         rgb_vc_std = torch.clip((rgb_vc_std - np.minimum(unc_min, unc_max)) / np.abs(unc_max - unc_min), 0, 1)
+
+
         im = ax.imshow(rgb_vc_std.cpu().numpy(), cmap="jet")
         divider = make_axes_locatable(ax)
         # cax = divider.append_axes("right", size="5%", pad=0.05)

@@ -32,8 +32,8 @@ class VCURFPipeline(VanillaPipeline):
         test_mode: Literal["test", "val", "inference"] = "val",
         world_size: int = 1,
         local_rank: int = 0,
-        num_vcams: int = 6,
-        sampling_radii_depth_ratio: float = 0.05,
+        num_vcams: int = 10,
+        sampling_radii_depth_ratio: float = 0.1,
         sampling_method: Literal["rgb", "depth"] = "rgb",
         grad_scaler: Optional[GradScaler] = None,
         # keep_origin_poses: bool = True,
@@ -110,10 +110,10 @@ class VCURFPipeline(VanillaPipeline):
         K_ = camera_ray_bundle.get_intrinsics_matrices().squeeze() #(3,3)
         K = torch.eye(4).to(K_)
         K[:3,:3] = K_
-
-        transform_ = torch.tensor(camera_ray_bundle.metadata['transform']).to(rd_c2w.device)
-        transform = torch.eye(4).to(transform_)
-        transform[:3, :] = transform_
+        #
+        # transform_ = torch.tensor(camera_ray_bundle.metadata['transform']).to(rd_c2w.device)
+        # transform = torch.eye(4).to(transform_)
+        # transform[:3, :] = transform_
 
         backwarp = BackwardWarping(out_hw=(camera_ray_bundle.height.item(), camera_ray_bundle.width.item()),
                                    device=outputs['depth'].device, K=K)
@@ -126,6 +126,14 @@ class VCURFPipeline(VanillaPipeline):
             vir_c2w = torch.eye(4).to(rd_c2w)
             vir_c2w[:3,:] = vir_camera_ray_bundle.camera_to_worlds.squeeze()
             # vir_c2w = torch.inverse(transform) @ vir_c2w
+            origin_vir_c2w = get_origin_pose(
+                oriented_pose=vir_camera_ray_bundle.camera_to_worlds.squeeze(0),
+                transform=vir_camera_ray_bundle.metadata['transform'],
+                scale = vir_camera_ray_bundle.metadata['scale_factor']
+            )
+
+            # rd2vir = torch.inverse(origin_rd_c2w) @ origin_vir_c2w
+
             rd2vir = torch.inverse(vir_c2w) @ rd_c2w
 
             rd2rd = torch.inverse(rd_c2w) @ rd_c2w
@@ -500,3 +508,47 @@ def get_origin_pose(oriented_pose, transform, scale):
     origin_pose = torch.inverse(transform_matrix) @ C2W
 
     return origin_pose
+
+
+# import torch
+#
+# # Assume we have:
+# # depth_normalized: Depth map in normalized camera space (HxW)
+# # K_normalized: Intrinsics of the normalized camera
+# # K_original: Intrinsics of the original camera
+# # T_normalized_to_original: Transformation from normalized camera to original camera pose (4x4 matrix)
+#
+# # Get the height and width of the depth map
+# height, width = depth_normalized.shape
+#
+# # Create a meshgrid of pixel coordinates
+# y, x = torch.meshgrid(torch.arange(height), torch.arange(width), indexing='ij')
+# pixel_coords = torch.stack([x, y, torch.ones_like(x)], dim=-1).float()  # Shape: (H, W, 3)
+#
+# # Back-project normalized depth map to 3D points in normalized camera space
+# depth_normalized_flat = depth_normalized.view(-1)
+# pixel_coords_flat = pixel_coords.view(-1, 3)
+#
+# # Convert to normalized camera 3D coordinates
+# points_normalized_camera = torch.linalg.inv(K_normalized) @ pixel_coords_flat.T * depth_normalized_flat
+#
+# # Add a row of ones for homogeneous coordinates
+# points_normalized_camera_h = torch.cat([points_normalized_camera, torch.ones(1, points_normalized_camera.shape[1])], dim=0)
+#
+# # Transform points to original camera pose
+# points_original_camera_h = T_normalized_to_original @ points_normalized_camera_h
+# points_original_camera = points_original_camera_h[:3]  # Drop the homogeneous row
+#
+# # Project points back to the original camera's image plane
+# points_image_h = (K_original @ points_original_camera).T
+#
+# # Normalize by z to get pixel coordinates in the original image space
+# points_image = points_image_h[:, :2] / points_image_h[:, 2:3]
+#
+# # Recover depth (z-coordinate) in the original camera space
+# depth_original_flat = points_original_camera[2]
+#
+# # Reshape to HxW
+# depth_original = depth_original_flat.view(height, width)
+#
+# print("Recovered Depth Map for Original Pose:", depth_original)

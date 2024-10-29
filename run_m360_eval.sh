@@ -25,7 +25,8 @@ CUDA_VISIBLE_DEVICES=1
 #
 ns-eval-unc vcurf-config --load-config ./output/m360/garden_v20/garden/active-nerfacto/main/config.yml \
         --sampling-method rgb \
-        --sampling-radii-depth-ratio 0.01 \
+        --sampling-radii-depth-ratio 0.1 \
+        --num-vcams 10 \
         --output-path ./output/m360/garden_v20/garden/vcurf/active-nerfacto/main/rgb_l2/metrics.json \
         --dataset-path  /mnt/Data2/nerf_datasets/m360/garden/  \
         --render-output-path ./output/m360/garden_v20/garden/vcurf/active-nerfacto/main/rgb_l2/plots --save-rendered-images --unc-max 0.3
