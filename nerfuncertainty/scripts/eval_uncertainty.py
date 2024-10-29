@@ -261,16 +261,16 @@ def save_imgs_rgb(
 
     # im = ax.imshow(vir_pred_imgs[0].permute(1,2,0).cpu().numpy())
     # import mediapy as media
-    # fname = Path("output/m360/debug/vir2rd_rgb_5.png")
+    # fname = Path("output/m360/debug/garden/vir2rd_rgb_5.png")
     # media.write_image(fname, vir2rd_pred_imgs[5].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/m360/debug/rd2rd_rgb_0.png")
+    # fname = Path("output/m360/debug/garden/rd2rd_rgb_0.png")
     # media.write_image(fname, rd2rd_pred_imgs[0].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/m360/debug/vir_rgb_5.png")
+    # fname = Path("output/m360/debug/garden/vir_rgb_5.png")
     # media.write_image(fname, vir_pred_imgs[5].permute(1,2,0).cpu().numpy())
 
-    # fname = Path("output/m360/debug/rgb_0.png")
+    # fname = Path("output/m360/debug/garden/rgb_0.png")
     # media.write_image(fname, outputs['rgb'].cpu().numpy())
 
     # fname = Path("output/depth_0.png")
@@ -286,9 +286,9 @@ def save_imgs_rgb(
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
     # im.save("output/m360/debug/depth_0.png")
 
-    # depth_img = outputs['expected_depth'].squeeze()
+    # depth_img = outputs['depth'].squeeze()
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
-    # im.save("output/m360/debug/expected_depth.png")
+    # im.save("output/m360/debug/garden/depth_0.png")
 
     # depth_img = outputs['accumulation'].squeeze()
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
@@ -305,7 +305,7 @@ def save_imgs_rgb(
 
     # depth_img = vir_depths[0].squeeze()
     # im = Image.fromarray((depth_img.cpu().numpy() * 255).astype("uint8"))
-    # im.save("output/m360/debug/vir_expected_depth_0.png")
+    # im.save("output/m360/debug/garden/vir_depth_0.png")
 
 
 
@@ -412,12 +412,23 @@ def get_unc_metrics_rgb(
     squared_error_flat = squared_error.flatten()
     absolute_error_flat = absolute_error.flatten()
     rgb_var_flat = (rgb_std**2).flatten()
-    # compaute average rgb variance for aleatoric experiment
     avg_rgb_var = rgb_var_flat.mean().item()
+    # compaute average rgb variance for aleatoric experiment
     if "rgb_vc_std" in outputs.keys():
         rgb_vc_std = outputs["rgb_vc_std"]
         rgb_vc_var_flat = (rgb_vc_std ** 2).flatten()
+        # avg_rgb_vc_var = rgb_vc_var_flat.mean().item()
+
+        valid_px = (rgb_vc_var_flat>0.)
+        rgb_vc_var_flat = rgb_vc_var_flat[valid_px]
         avg_rgb_vc_var = rgb_vc_var_flat.mean().item()
+
+        squared_error_flat = squared_error_flat[valid_px]
+        absolute_error_flat = absolute_error_flat[valid_px]
+        rgb_var_flat = rgb_var_flat[valid_px]
+        avg_rgb_var = rgb_var_flat.mean().item()
+
+
 
     # area under the sparsification error (AUSE) curve
     # ratio, err_mae, err_var_mae, ause_mae = ause(
@@ -491,21 +502,35 @@ def get_unc_metrics_rgb(
     if len(rgb_std_flat.shape) == 1:
         # copy std along RGB channels
         rgb_std_flat = rgb_std_flat.unsqueeze(-1).repeat(1, 3)
-    
+
+        if "rgb_vc_std" in outputs.keys():
+            # The two std is valid pxs
+            rgb_vc_std_flat = rgb_vc_var_flat.sqrt()
+            rgb_pred_flat = rgb_pred_flat.sum(-1)
+            rgb_pred_flat = rgb_pred_flat[valid_px]
+            rgb_gt_flat = rgb_gt_flat.sum(-1)
+            rgb_gt_flat = rgb_gt_flat[valid_px]
+
+            rgb_std_flat = rgb_std_flat.mean(-1)
+
+            auce_vc_dict = auce(mean_values=rgb_pred_flat.cpu().numpy(),
+                                sigma_values=rgb_vc_std_flat.cpu().numpy(),
+                                target_values=rgb_gt_flat.cpu().numpy())
+
     auce_dict = auce(mean_values=rgb_pred_flat.cpu().numpy(), 
                      sigma_values=rgb_std_flat.cpu().numpy(), 
                      target_values=rgb_gt_flat.cpu().numpy())
     absolute_error_img = torch.clip(absolute_error, min=0.0, max=1.0)
 
-    if 'rgb_vc_std' in outputs.keys():
-        rgb_vc_std_flat = rgb_vc_var_flat.sqrt()
-        if len(rgb_vc_std_flat.shape) == 1:
-            # copy std along RGB channels
-            rgb_vc_std_flat = rgb_vc_std_flat.unsqueeze(-1).repeat(1, 3)
-
-        auce_vc_dict = auce(mean_values=rgb_pred_flat.cpu().numpy(),
-                         sigma_values=rgb_vc_std_flat.cpu().numpy(),
-                         target_values=rgb_gt_flat.cpu().numpy())
+    # if 'rgb_vc_std' in outputs.keys():
+    #     rgb_vc_std_flat = rgb_vc_var_flat.sqrt()
+    #     if len(rgb_vc_std_flat.shape) == 1:
+    #         # copy std along RGB channels
+    #         rgb_vc_std_flat = rgb_vc_std_flat.unsqueeze(-1).repeat(1, 3)
+    #
+    #     auce_vc_dict = auce(mean_values=rgb_pred_flat.cpu().numpy(),
+    #                      sigma_values=rgb_vc_std_flat.cpu().numpy(),
+    #                      target_values=rgb_gt_flat.cpu().numpy())
 
     # TODO: modify outputs as vc results + baseline
     dict_output = {

@@ -84,13 +84,15 @@ class VCURFPipeline(VanillaPipeline):
         outputs = self.model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box)
 
         GetVCams = VirtualCameras(camera_ray_bundle)
-        # look_at, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
-        # D_median = outputs['depth'].clone().flatten().median(0).values
 
-        look_at, D_center, rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        look_at, D_center, origin_rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
         # D_median = outputs['depth'].clone().flatten().median(0).values
-
         # radiaus = self.sampling_radii_depth_ratio * D_median
+
+        # look_at, D_center = extract_scene_center_and_c2w_v2(outputs['depth'].squeeze(), camera_ray_bundle)
+        rd_c2w = torch.eye(4).to(origin_rd_c2w.device)
+        rd_c2w[:3,:] = camera_ray_bundle.camera_to_worlds.squeeze(0)
+
         radiaus = self.sampling_radii_depth_ratio * D_center
         Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at, radiaus=radiaus)
 
@@ -146,13 +148,13 @@ class VCURFPipeline(VanillaPipeline):
         #  compute uncertainty by l2 diff
         ################################
 
-        breakpoint()
         # depth uncertainty
         vir2rd_depth_sum = vir2rd_depths.sum(0)
         numels = float(self.num_vcams) - nv_mask.sum(0)
         vir2rd_depth = torch.zeros_like(rd_depth)
         vir2rd_depth[numels > 0] = vir2rd_depth_sum[numels > 0] / numels[numels > 0]
         depth_l2 = (rd_depth - vir2rd_depth) ** 2
+        depth_l2[numels<1.] = 0.
         depth_std = torch.sqrt(depth_l2).squeeze(0)
 
         # rgb uncertainty
@@ -161,6 +163,7 @@ class VCURFPipeline(VanillaPipeline):
         vir2rd_pred = torch.zeros_like(rendering_)
         vir2rd_pred[numels > 0] = vir2rd_pred_sum[numels > 0] / numels[numels > 0]
         rgb_l2 = (rendering_ - vir2rd_pred) ** 2
+        rgb_l2[numels < 1.] = 0.
         rgb_std = torch.sqrt(rgb_l2).squeeze(0)
 
         if 'depth_std' in outputs.keys():
@@ -200,24 +203,26 @@ class VCURFPipeline(VanillaPipeline):
 class VirtualCameras:
     def __init__(self, Center_Camera):
         self.center_camera: Cameras = Center_Camera
-        self.sampling_center,self.transform = self.get_camera_center(self.center_camera)
-        self.data_device = self.sampling_center.device
+        self.origin_camera_o,self.transform, self.origin_T = self.get_camera_center(self.center_camera)
+        # self.sampling_center = self.get_camera_position(self.center_camera)
+        self.data_device = self.origin_camera_o.device
 
     def get_camera_center(self,camera: Cameras):
         c2w_ = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
-        # c2w_nerf = torch.eye(4).to(c2w_.device)
-        # c2w_nerf[:3,:] = c2w_
         transform = torch.tensor(camera.metadata['transform']).to(c2w_.device)
         self.scale_factor = camera.metadata['scale_factor']
         self.transform = torch.eye(4).to(transform.device)
         self.transform[:3,:] = transform
         origin_c2w = get_origin_pose(c2w_, transform, self.scale_factor)
-        # origin_c2w = torch.inverse(self.transform) @ c2w_nerf
-        R = origin_c2w[:3, :3]
-        T = origin_c2w[:3, 3]
-        camera_o = -R.T @ T
-        # camera_o = origin_c2w[:3,3]
-        return camera_o,self.transform
+        origin_R = origin_c2w[:3, :3]
+        origin_T = origin_c2w[:3, 3]
+        camera_o = -origin_R.T @ origin_T
+        return camera_o,self.transform, origin_T
+
+    # def get_camera_position(self,camera: Cameras):
+    #     c2w = camera.camera_to_worlds.squeeze().clone() # (1,3,4)
+    #     translation = c2w[:3, 3]
+    #     return translation
 
     def random_points_on_sphere(self, N, r, O):
         """
@@ -240,22 +245,26 @@ class VirtualCameras:
 
     def get_N_near_cam_by_look_at(self, N, look_at, radiaus=0.1):
         # sample new camera center
-        new_centers = self.random_points_on_sphere(N,radiaus, self.sampling_center)
+        new_translations = self.random_points_on_sphere(N,radiaus, self.origin_T)
+        # new_translations = self.random_points_on_sphere(N,radiaus, self.sampling_center)
         Vcams = []
-        look_at = look_at.to(self.sampling_center.device)
-        for new_o in new_centers:
+        look_at = look_at.to(self.origin_T.device)
+        for new_t in new_translations:
             # create new camera pose by look at
-            forward = look_at - new_o
+            forward = look_at - new_t
             forward /= torch.linalg.norm(forward)
-            forward = forward.to(new_o)
-            world_up = torch.tensor([0, 0, 1]).to(new_o)  # need to be careful for the openGL system!!!
+            forward = forward.to(new_t)
+            world_up = torch.tensor(self.center_camera.metadata['world_up']).to(new_t.device)
+
+            # world_up = torch.tensor([0., 0., 1.]).to(new_t.device)  # need to be careful for the openGL system!!!
             right = torch.cross(world_up, forward)
             right /= torch.linalg.norm(right)
             up = torch.cross(forward, right)
             new_R = torch.vstack([right, up, forward]).T
-            new_T = -new_R @ new_o
+            # new_T = -new_R @ new_o
+            new_T = new_t
 
-            new_c2w = torch.eye(4).to(new_o)
+            new_c2w = torch.eye(4).to(new_t.device)
             new_c2w[:3, :3] = new_R
             new_c2w[:3, 3] = new_T
 
@@ -465,6 +474,20 @@ def extract_scene_center_and_c2w(depth, camera):
     center_depth = center_depth_path.flatten().mean()
 
     return scene_center, center_depth, origin_c2w
+
+def extract_scene_center_and_c2w_v2(depth, camera):
+    # if we assume the object is in the photo center
+    h, w = depth.shape[0], depth.shape[1]
+    center_depth_path = depth.squeeze()[int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
+    center_depth = center_depth_path.flatten().mean()
+
+    c2w = camera.camera_to_worlds[0].clone().squeeze(0)  # (3,4)
+    camera_position = c2w[:3, 3]
+    forward_direction = -c2w[:3, 2]
+    scene_center = camera_position + forward_direction * center_depth
+
+    return scene_center, center_depth
+
 
 def get_origin_pose(oriented_pose, transform, scale):
     C2W = torch.eye(4).to(oriented_pose.device)

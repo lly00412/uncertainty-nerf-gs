@@ -203,6 +203,9 @@ class SparseMipNerf360v2(Nerfstudio):
 
         poses = torch.from_numpy(np.array(poses).astype(np.float32))
         origin_poses = poses.clone()
+        up_vector = torch.mean(poses[:, :3, 1], dim=0)
+        up_vector = up_vector / torch.linalg.norm(up_vector)
+
         poses, transform_matrix = camera_utils.auto_orient_and_center_poses(
             poses,
             method=orientation_method,
@@ -274,6 +277,7 @@ class SparseMipNerf360v2(Nerfstudio):
 
         metadata['scale_factor'] = scale_factor
         metadata['transform'] = transform_matrix.tolist()
+        metadata['world_up'] = up_vector.tolist()
         # transform_matrix
         # breakpoint()
         # metadata = {'poses_scale_transform_tensor': metadata_tensor}
