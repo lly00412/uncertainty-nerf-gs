@@ -83,9 +83,14 @@ class VCURFPipeline(VanillaPipeline):
         """
         outputs = self.model.get_outputs_for_camera(camera_ray_bundle, obb_box=obb_box)
 
+        transform = camera_ray_bundle.metadata['transform']
+        scale_factor = camera_ray_bundle.metadata['scale_factor']
+        K_ = camera_ray_bundle.get_intrinsics_matrices().squeeze()  # (3,3)
+        K = torch.eye(4).to(K_)
+        K[:3, :3] = K_
         GetVCams = VirtualCameras(camera_ray_bundle)
 
-        look_at, D_center, origin_rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
+        look_at_origin, D_center_origin, origin_rd_c2w = extract_scene_center_and_c2w(outputs['depth'].squeeze(), camera_ray_bundle)
         # D_median = outputs['depth'].clone().flatten().median(0).values
         # radiaus = self.sampling_radii_depth_ratio * D_median
 
@@ -93,12 +98,15 @@ class VCURFPipeline(VanillaPipeline):
         rd_c2w = torch.eye(4).to(origin_rd_c2w.device)
         rd_c2w[:3,:] = camera_ray_bundle.camera_to_worlds.squeeze(0)
 
-        radiaus = self.sampling_radii_depth_ratio * D_center
-        Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at, radiaus=radiaus)
+        radiaus = self.sampling_radii_depth_ratio * D_center_origin
+        Vcams = GetVCams.get_N_near_cam_by_look_at(self.num_vcams, look_at=look_at_origin, radiaus=radiaus)
+        rd_depth = outputs['depth'].squeeze()
+        rd_depth_origin = get_origin_depth(transform,scale_factor,K,rd_depth)
+        # rd_depth = outputs['depth'].clone().permute(2,0,1)
+        rd_depth_origin = rd_depth_origin.unsqueeze(0) #(1, h, w)
 
-        rd_depth = outputs['depth'].clone().permute(2,0,1)
-
-        rd_depths = rd_depth.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
+        # rd_depths = rd_depth.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
+        rd_depths_origin = rd_depth_origin.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)  # (N, h, w)
         pred_img = outputs['rgb'].clone().permute(2,0,1)
         pred_imgs = pred_img.unsqueeze(0).repeat(self.num_vcams, 1, 1, 1)
 
@@ -106,10 +114,6 @@ class VCURFPipeline(VanillaPipeline):
         vir_pred_imgs = []
         rd2virs = []
         rd2rds = []
-
-        K_ = camera_ray_bundle.get_intrinsics_matrices().squeeze() #(3,3)
-        K = torch.eye(4).to(K_)
-        K[:3,:3] = K_
         #
         # transform_ = torch.tensor(camera_ray_bundle.metadata['transform']).to(rd_c2w.device)
         # transform = torch.eye(4).to(transform_)
@@ -121,6 +125,7 @@ class VCURFPipeline(VanillaPipeline):
         for vir_camera_ray_bundle in Vcams:
             vir_render_pkg = self.model.get_outputs_for_camera(vir_camera_ray_bundle, obb_box=obb_box)
             vir_depth = vir_render_pkg['depth'].squeeze()
+            vir_depth_origin = (transform,scale_factor,K,vir_depth)
 
             vir_pred_img = vir_render_pkg['rgb'].permute(2,0,1)
             vir_c2w = torch.eye(4).to(rd_c2w)
@@ -132,29 +137,24 @@ class VCURFPipeline(VanillaPipeline):
                 scale = vir_camera_ray_bundle.metadata['scale_factor']
             )
 
-            # rd2vir = torch.inverse(origin_rd_c2w) @ origin_vir_c2w
-
-            rd2vir = torch.inverse(vir_c2w) @ rd_c2w
-
+            rd2vir = torch.inverse(origin_rd_c2w) @ origin_vir_c2w
+            # rd2vir = torch.inverse(vir_c2w) @ rd_c2w
             rd2rd = torch.inverse(rd_c2w) @ rd_c2w
             rd2virs.append(rd2vir)
-            rd2rds.append(rd2rd)
-            vir_depths.append(vir_depth.unsqueeze(0))
+            # vir_depths.append(vir_depth.unsqueeze(0))
+            vir_depths.append(vir_depth_origin.unsqueeze(0))
             vir_pred_imgs.append(vir_pred_img)
         vir_depths = torch.stack(vir_depths)
         vir_pred_imgs = torch.stack(vir_pred_imgs)
         rd2virs = torch.stack(rd2virs)
-        rd2rds = torch.stack(rd2rds)
         vir2rd_pred_imgs, vir2rd_depths, nv_mask = backwarp(img_src=vir_pred_imgs, depth_src=vir_depths,
-                                                            depth_tgt=rd_depths,
+                                                            depth_tgt=rd_depths_origin,
                                                             tgt2src_transform=rd2virs)
-
-        rd2rd_pred_imgs, rd2rd_depths, nv_mask = backwarp(img_src=pred_imgs, depth_src=rd_depths,
-                                                            depth_tgt=rd_depths,
-                                                            tgt2src_transform=rd2rds)
         ################################
         #  compute uncertainty by l2 diff
         ################################
+
+        breakpoint()
 
         # depth uncertainty
         vir2rd_depth_sum = vir2rd_depths.sum(0)
@@ -452,18 +452,23 @@ def extract_scene_center_and_c2w(depth, camera):
     K[:3,:3] = K_
     inv_K = torch.inverse(K).unsqueeze(0)
     backproj_func = Backprojection(height=camera.image_height, width=camera.image_width)
-    depth_v = depth.clone()
-    depth_v = depth_v.unsqueeze(0).unsqueeze(0)
-    # mask = (depth_v < depth_v.max()).squeeze(0)
-    mask = (depth_v > 0.).squeeze(0)
-    point3d_camera = backproj_func(depth_v.cpu(), inv_K.cpu(), img_like_out=True).squeeze(0)
     # C2W = torch.tensor(getView2World(view.R, view.T))
-    oriented_c2w = camera.camera_to_worlds[0].clone().squeeze(0) # (3,4)
-    transform = camera.metadata['transform']
+    oriented_c2w = camera.camera_to_worlds[0].clone().squeeze(0)  # (3,4)
+    transform_ = camera.metadata['transform']
+    transform = torch.eye(4).to(K_.device)
+    transform[:3,4] = torch.tensor(transform_).to(K_.device)
     scale_factor = camera.metadata['scale_factor']
-    origin_c2w = get_origin_pose(oriented_c2w,transform, scale_factor)
+    origin_c2w = get_origin_pose(oriented_c2w, transform, scale_factor)
+    origin_depth = get_origin_depth(transform,scale_factor,K,depth)
 
-    point3d_world = origin_c2w.cpu() @ point3d_camera.view(4, -1)
+    depth_camera = depth.clone()
+    depth_camera = depth_camera.unsqueeze(0).unsqueeze(0)
+    # mask = (depth_v < depth_v.max()).squeeze(0)
+    mask = (depth_camera > 0.).squeeze(0)
+    point3d_camera = backproj_func(depth_camera.cpu(), inv_K.cpu(), img_like_out=True).squeeze(0) / scale_factor
+    point3d_origin = torch.inverse(transform) @ point3d_camera.view(4, -1)
+
+    point3d_world = origin_c2w.cpu() @ point3d_origin
     point3d_world = point3d_world.view(4, point3d_camera.shape[1], point3d_camera.shape[2])
 
     # expanded_mask = mask.expand_as(point3d_world)
@@ -476,7 +481,7 @@ def extract_scene_center_and_c2w(depth, camera):
     # if we assume the object is in the photo center
     h, w = point3d_world.shape[1], point3d_world.shape[2]
     center_patch = point3d_world[:, int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
-    center_depth_path = depth.squeeze()[int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
+    center_depth_path = origin_depth.squeeze()[int(h // 2) - 8: int(h // 2) + 8, int(w // 2) - 8: int(w // 2) + 8]
 
     scene_center = center_patch.reshape(4, -1).mean(-1)[:3]
     center_depth = center_depth_path.flatten().mean()
@@ -509,6 +514,31 @@ def get_origin_pose(oriented_pose, transform, scale):
 
     return origin_pose
 
+def get_origin_depth(transform, scale, K, depth_oriented):
+    transform = torch.tensor(transform).to(K.device)
+    transform = torch.cat([transform,torch.tensor([[0,0,0,1]]).to(transform.device)],dim=0)
+
+    height, width = depth_oriented.shape
+    y, x = torch.meshgrid(torch.arange(height), torch.arange(width), indexing='ij')
+    pixel_coords = torch.stack([x, y, torch.ones_like(x)], dim=-1).float()  # Shape: (H, W, 3)
+
+    depth_oriented_flat = depth_oriented.view(-1)
+    pixel_coords_flat = pixel_coords.view(-1, 3)
+
+    points_oriented_camera = torch.linalg.inv(K) @ pixel_coords_flat.T * depth_oriented_flat
+    points_oriented_camera /= scale
+
+    points_oriented_camera_h = torch.cat([points_oriented_camera, torch.ones(1, points_oriented_camera.shape[1])],
+                                           dim=0)
+    points_original_camera_h = torch.linalg.inv(transform) @ points_oriented_camera_h
+    points_original_camera = points_original_camera_h[:3]  # Drop the homogeneous row
+
+    # points_image_h = (K @ points_original_camera).T
+    # points_image = points_image_h[:, :2] / points_image_h[:, 2:3]
+
+    depth_original_flat = points_original_camera[2]
+    depth_original = depth_original_flat.view(height, width)
+    return depth_original
 
 # import torch
 #
